@@ -159,9 +159,15 @@ function renderCharts(products, summary) {
     }
   });
 
-  const days = Array.from({length: 30}, (_, i) => `Day ${i+1}`);
-  const histData = Array.from({length: 16}, () => Math.floor(Math.random() * 50) + 10);
-  const projData = Array(15).fill(null).concat([histData[15]], Array.from({length: 14}, () => Math.floor(Math.random() * 50) + 10));
+  const trendProduct = topProducts[0];
+  const history = trendProduct.history || [];
+  const historyLabels = history.map(point => point.date);
+  const forecastLabels = Array.from({ length: trendProduct.forecast.length }, (_, index) => `Forecast ${index + 1}`);
+  const days = historyLabels.concat(forecastLabels);
+  const histData = history.map(point => point.sales);
+  const projData = Array(histData.length ? histData.length - 1 : 0).fill(null)
+    .concat(histData.length ? [histData[histData.length - 1]] : [])
+    .concat(trendProduct.forecast || []);
 
   trendChartInstance = new Chart(canvas2, {
     type: 'line',
@@ -169,14 +175,14 @@ function renderCharts(products, summary) {
       labels: days,
       datasets: [
         {
-          label: 'Historical Sales',
+          label: `${trendProduct.product} · historical`,
           data: histData,
           borderColor: COLORS.pine,
           tension: 0.3,
           pointRadius: 0
         },
         {
-          label: 'Forecast Projection',
+          label: `${trendProduct.product} · forecast`,
           data: projData,
           borderColor: COLORS.green,
           borderDash: [5, 5],
@@ -250,7 +256,6 @@ async function loadDemo() {
   buttons.forEach((button) => { if(button) button.disabled = true; });
   try {
     await request('/api/demo/reset', { method: 'POST' });
-    if(authToken) logout(); // Demo works without auth
     await refresh();
     $('#salesMessage').textContent = 'Demo sales data loaded successfully.'; $('#salesMessage').className = 'upload-message success';
     $('#documentMessage').textContent = '3 demo knowledge documents indexed.'; $('#documentMessage').className = 'upload-message success';
@@ -527,6 +532,9 @@ $('#tabLogin').addEventListener('click', () => {
   $('#tabRegister').classList.remove('active');
   $('#authOrgName').style.display = 'none';
   $('#authName').style.display = 'none';
+  $('#authOrgName').required = false;
+  $('#authName').required = false;
+  $('#authPassword').autocomplete = 'current-password';
   $('#authSubmit').textContent = 'Login';
   $('#authError').textContent = '';
 });
@@ -536,6 +544,9 @@ $('#tabRegister').addEventListener('click', () => {
   $('#tabLogin').classList.remove('active');
   $('#authOrgName').style.display = 'block';
   $('#authName').style.display = 'block';
+  $('#authOrgName').required = true;
+  $('#authName').required = true;
+  $('#authPassword').autocomplete = 'new-password';
   $('#authSubmit').textContent = 'Register';
   $('#authError').textContent = '';
 });

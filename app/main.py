@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -34,6 +34,7 @@ VALID_ORG_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ01234
 TOKEN_SECRET = os.getenv("SMARTSTOCK_TOKEN_SECRET", "change-this-in-production")
 TOKEN_EXPIRY_SECONDS = int(os.getenv("SMARTSTOCK_TOKEN_EXPIRY", "86400"))  # 24 hours
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+ALLOW_DEMO = os.getenv("ALLOW_DEMO", "true" if ENVIRONMENT == "development" else "false").lower() == "true"
 
 # Schema version — bump when adding migration steps.
 SCHEMA_VERSION = 2
@@ -48,8 +49,10 @@ logging.basicConfig(
 )
 logger = logging.getLogger("smartstock")
 
-if ENVIRONMENT != "development" and TOKEN_SECRET == "change-this-in-production":
-    logger.warning("SMARTSTOCK_TOKEN_SECRET is still set to the default — change it for production.")
+if ENVIRONMENT != "development" and (
+    TOKEN_SECRET == "change-this-in-production" or len(TOKEN_SECRET) < 32
+):
+    raise RuntimeError("SMARTSTOCK_TOKEN_SECRET must be a random value of at least 32 characters in production.")
 
 # ---------------------------------------------------------------------------
 # Database helpers
@@ -272,6 +275,13 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=8, max_length=128)
 
 
+def validate_email_and_password(email, password):
+    if "@" not in email or "." not in email.rsplit("@", 1)[-1]:
+        raise HTTPException(422, "Enter a valid email address.")
+    if not any(character.isupper() for character in password) or not any(character.isdigit() for character in password):
+        raise HTTPException(422, "Password must include at least one uppercase letter and one number.")
+
+
 class FeedbackRequest(BaseModel):
     question: str = Field(min_length=3, max_length=1000)
     rating: int = Field(ge=-1, le=1)
@@ -339,8 +349,10 @@ def get_org_id(x_workspace_token: Optional[str] = Header(None)) -> str:
     workspace.  This keeps the one-click demo functional while protecting
     authenticated tenants.
     """
-    if not x_workspace_token:
+    if not x_workspace_token and ALLOW_DEMO:
         return "demo"
+    if not x_workspace_token:
+        raise HTTPException(401, "Sign in to access a private workspace.")
     identity = verify_token(x_workspace_token)
     return safe_org(identity["organization_id"])
 
@@ -378,13 +390,20 @@ def health():
 
 @app.post("/api/auth/register")
 def register(request: AuthRequest):
+    validate_email_and_password(request.email, request.password)
     organization_id = "org_{}".format(secrets.token_hex(5))
     with db_connection() as db:
         if db.execute("SELECT 1 FROM users WHERE email = ?", (request.email.lower(),)).fetchone():
             raise HTTPException(409, "An account with this email already exists.")
         db.execute("INSERT INTO organizations (id, name) VALUES (?, ?)", (organization_id, request.organization_name.strip()))
         cursor = db.execute("INSERT INTO users (organization_id, email, name, password_hash, role) VALUES (?, ?, ?, ?, ?)", (organization_id, request.email.lower(), request.name.strip(), password_hash(request.password), "admin"))
-        user = {"id": cursor.lastrowid, "organization_id": organization_id, "role": "admin", "name": request.name.strip()}
+        user = {
+            "id": cursor.lastrowid,
+            "organization_id": organization_id,
+            "organization_name": request.organization_name.strip(),
+            "role": "admin",
+            "name": request.name.strip(),
+        }
     logger.info("Registered org '%s' (%s)", request.organization_name.strip(), organization_id)
     return {"token": issue_token(user), "user": user}
 
@@ -392,10 +411,18 @@ def register(request: AuthRequest):
 @app.post("/api/auth/login")
 def login(request: LoginRequest):
     with db_connection() as db:
-        user = db.execute("SELECT id, organization_id, name, role, password_hash FROM users WHERE email = ?", (request.email.lower(),)).fetchone()
+        user = db.execute("""
+            SELECT users.id, users.organization_id, users.name, users.role, users.password_hash,
+                   organizations.name AS organization_name
+            FROM users JOIN organizations ON organizations.id = users.organization_id
+            WHERE users.email = ?
+        """, (request.email.lower(),)).fetchone()
     if not user or not verify_password(request.password, user["password_hash"]):
         raise HTTPException(401, "Incorrect email or password.")
-    payload = {"id": user["id"], "organization_id": user["organization_id"], "name": user["name"], "role": user["role"]}
+    payload = {
+        "id": user["id"], "organization_id": user["organization_id"],
+        "organization_name": user["organization_name"], "name": user["name"], "role": user["role"],
+    }
     return {"token": issue_token(payload), "user": payload}
 
 
@@ -403,10 +430,18 @@ def login(request: LoginRequest):
 def me(x_workspace_token: Optional[str] = Header(None)):
     identity = verify_token(x_workspace_token)
     with db_connection() as db:
-        user = db.execute("SELECT name, email, role FROM users WHERE id = ? AND organization_id = ?", (identity["id"], identity["organization_id"])).fetchone()
+        user = db.execute("""
+            SELECT users.name, users.email, users.role, organizations.name AS organization_name
+            FROM users JOIN organizations ON organizations.id = users.organization_id
+            WHERE users.id = ? AND users.organization_id = ?
+        """, (identity["id"], identity["organization_id"])).fetchone()
     if not user:
         raise HTTPException(401, "Account no longer exists.")
-    return {"organization_id": identity["organization_id"], "name": user["name"], "email": user["email"], "role": user["role"]}
+    return {
+        "organization_id": identity["organization_id"],
+        "organization_name": user["organization_name"],
+        "name": user["name"], "email": user["email"], "role": user["role"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -414,8 +449,7 @@ def me(x_workspace_token: Optional[str] = Header(None)):
 # ---------------------------------------------------------------------------
 
 @app.post("/api/demo/reset")
-def reset_demo():
-    org_id = "demo"
+def reset_demo(org_id: str = Depends(get_org_id)):
     rows = demo_sales_rows()
     with db_connection() as db:
         db.execute("DELETE FROM sales WHERE organization_id = ?", (org_id,))
@@ -449,8 +483,20 @@ async def upload_sales(
     if len(raw) > 5_000_000:
         raise HTTPException(413, "CSV exceeds the 5 MB demo limit.")
     try:
-        text = raw.decode("utf-8-sig")
-        rows = normalise_sales_rows(csv.DictReader(io.StringIO(text)))
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            # Excel exports from older regional installations are often Windows-1252.
+            text = raw.decode("cp1252")
+        sample = text[:8192]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except csv.Error:
+            dialect = csv.excel
+        reader = csv.DictReader(io.StringIO(text), dialect=dialect)
+        if not reader.fieldnames:
+            raise ValueError("The CSV needs a header row.")
+        rows = normalise_sales_rows(reader)
     except (UnicodeDecodeError, ValueError) as error:
         raise HTTPException(400, str(error))
     with db_connection() as db:
@@ -661,6 +707,6 @@ def export_sales(org_id: str = Depends(get_org_id)):
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     if isinstance(exc, HTTPException):
-        raise exc
+        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    raise HTTPException(500, "An internal error occurred. Please try again.")
+    return JSONResponse(status_code=500, content={"detail": "An internal error occurred. Please try again."})

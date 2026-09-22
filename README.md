@@ -4,7 +4,7 @@ SmartStock AI is a deployable final-year B.Tech project that combines sales fore
 
 ## What is implemented
 
-- CSV ingestion with input validation (`Date`, `Product`, `Quantity`/`Sales`; optional `Inventory`)
+- CSV ingestion with input validation and compatibility mapping for common exports (`Date`/`Order Date`, `Product`/`Item`/`SKU`, `Quantity`/`Sales`/`Units Sold`; optional `Inventory`/`Stock`). Extra columns and comma, semicolon, tab, and pipe delimiters are supported.
 - Per-product 14-day least-squares demand forecast
 - Low-stock/reorder signals and simple anomalous-demand detection
 - Document ingestion for `.txt`, `.md`, and `.csv` files
@@ -24,7 +24,9 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
-Open `http://127.0.0.1:8000`, then select **Load demo data**.
+Open `http://127.0.0.1:8000`. You can continue with the demo workspace, or register an account to keep uploaded data isolated to your own workspace. Passwords must be at least eight characters and include an uppercase letter and a number.
+
+CSV uploads accept UTF-8 spreadsheet exports, common date formats, currency/thousands separators, and extra columns. The parser reports which required column is missing instead of silently importing an incorrect file.
 
 ## Optional AI synthesis
 
@@ -43,7 +45,7 @@ The implementation follows the [official OpenAI Responses API quickstart](https:
 2. In Render, create a **Web Service** connected to the repository.
 3. Choose Python 3, build command `pip install -r requirements.txt`, and start command `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
 4. Add `OPENAI_API_KEY` only if you want model-generated answers; the demo works without it.
-5. For a production deployment, replace local SQLite with managed Postgres, add real authentication, private object storage, and a persistent vector database.
+5. For a production deployment, set `ENVIRONMENT=production`, leave `ALLOW_DEMO=false`, and provide a random `SMARTSTOCK_TOKEN_SECRET` of at least 32 characters. Replace local SQLite with managed Postgres, private object storage, a persistent vector database, rate limits, and an external secret manager before handling sensitive company data.
 
 ## Data-security notes
 

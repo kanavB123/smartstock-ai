@@ -20,10 +20,10 @@
         </div>
         
         <form id="authForm" class="auth-form">
-          <input type="text" id="authOrgName" placeholder="Organization Name" style="display:none;" />
-          <input type="text" id="authName" placeholder="Your Name" style="display:none;" />
-          <input type="email" id="authEmail" placeholder="Email Address" required />
-          <input type="password" id="authPassword" placeholder="Password" required />
+          <input type="text" id="authOrgName" placeholder="Organization Name" autocomplete="organization" style="display:none;" />
+          <input type="text" id="authName" placeholder="Your Name" autocomplete="name" style="display:none;" />
+          <input type="email" id="authEmail" placeholder="Email Address" autocomplete="email" required />
+          <input type="password" id="authPassword" placeholder="Password" autocomplete="current-password" minlength="8" required />
           <button type="submit" id="authSubmit" class="auth-submit">Login</button>
           <div id="authError" class="auth-error"></div>
         </form>
@@ -106,16 +106,16 @@
             </div>
           </div>
           <section class="upload-grid">
-            <article class="panel upload-card accent-green"><div class="card-icon">↗</div><div class="section-title"><div><h2>Sales data</h2><p>CSV with Date, Product and Quantity/Sales. Inventory is optional.</p></div></div>
+            <article class="panel upload-card accent-green"><div class="card-icon">↗</div><div class="section-title"><div><h2>Sales data</h2><p>SmartStock maps common spreadsheet headers and ignores extra columns. Date, Product, and Quantity/Sales are required; Inventory is optional.</p></div></div>
               <div class="mode-toggle">
                 <button class="active" data-mode="replace">Replace</button>
                 <button data-mode="append">Append</button>
               </div>
               <label class="drop-zone"><input id="salesFile" type="file" accept=".csv" /><span class="upload-icon">↑</span><strong>Choose sales CSV</strong><small>Maximum 5 MB</small></label><p id="salesMessage" class="upload-message"></p>
             </article>
-            <article class="panel upload-card accent-orange"><div class="card-icon warm">▤</div><div class="section-title"><div><h2>Knowledge base</h2><p>Supplier policies, product notes, and replenishment guides.</p></div></div><label class="drop-zone warm-zone"><input id="documentFile" type="file" accept=".txt,.md,.csv,.pdf" /><span class="upload-icon">↑</span><strong>Choose knowledge file</strong><small>.txt, .md, .csv, .pdf · Maximum 2 MB</small></label><p id="documentMessage" class="upload-message"></p></article>
+            <article class="panel upload-card accent-orange"><div class="card-icon warm">▤</div><div class="section-title"><div><h2>Knowledge base</h2><p>Supplier policies, product notes, and replenishment guides.</p></div></div><label class="drop-zone warm-zone"><input id="documentFile" type="file" accept=".txt,.md,.csv,.pdf" /><span class="upload-icon">↑</span><strong>Choose knowledge file</strong><small>.txt, .md, .csv, .pdf · Maximum 8 MB</small></label><p id="documentMessage" class="upload-message"></p></article>
           </section>
-          <section class="panel info-panel"><div class="info-illustration"><span>01</span><span>02</span><span>03</span></div><div><p class="eyebrow">HOW IT WORKS</p><h2>Data in. Decisions out.</h2><p>Sales rows drive the dashboard’s forecasts, reorder signals, and anomaly detection. Documents are chunked and retrieved only when they support a question in the assistant.</p></div><div class="format-list"><strong>Accepted sales columns</strong><code>Date</code><code>Product</code><code>Quantity / Sales</code><code>Inventory <em>optional</em></code></div></section>
+          <section class="panel info-panel"><div class="info-illustration"><span>01</span><span>02</span><span>03</span></div><div><p class="eyebrow">HOW IT WORKS</p><h2>Data in. Decisions out.</h2><p>Sales rows drive the dashboard’s forecasts, reorder signals, and anomaly detection. Documents are chunked and retrieved only when they support a question in the assistant.</p></div><div class="format-list"><strong>Recognized sales columns</strong><code>Date / Order Date</code><code>Product / Item / SKU</code><code>Quantity / Sales / Units Sold</code><code>Inventory / Stock <em>optional</em></code></div></section>
         </section>
 
         <section id="intelligence" class="view" aria-labelledby="intelligence-title">

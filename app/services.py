@@ -3,6 +3,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 import math
 import re
+import unicodedata
 
 
 TOKEN_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{1,}")
@@ -37,43 +38,86 @@ def query_terms(query):
 
 
 def parse_date(value):
-    """Accept the two most common spreadsheet date formats."""
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+    """Accept common spreadsheet date formats, including timestamps."""
+    value = (value or "").strip()
+    for fmt in (
+        "%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y",
+        "%d-%m-%Y", "%m-%d-%Y", "%Y-%m-%d %H:%M:%S",
+        "%d/%m/%Y %H:%M:%S", "%m/%d/%Y %H:%M:%S",
+    ):
         try:
-            return datetime.strptime(value.strip(), fmt).date()
+            return datetime.strptime(value, fmt).date()
         except (ValueError, AttributeError):
             continue
-    raise ValueError("Date must be YYYY-MM-DD, DD/MM/YYYY, or MM/DD/YYYY")
+    # ISO timestamps with a timezone are common in exports.
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
+    except (ValueError, TypeError):
+        raise ValueError("Could not read a date. Use a date column such as 2026-09-01 or 01/09/2026.")
+
+
+def normalise_header(value):
+    """Make human spreadsheet headers comparable without changing row values."""
+    value = unicodedata.normalize("NFKD", value or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
+
+
+def parse_number(value, label):
+    """Read numbers exported with thousands separators, currency, or parentheses."""
+    cleaned = (value or "").strip().replace(",", "").replace(" ", "")
+    if not cleaned:
+        raise ValueError("Every row needs a numeric {} column".format(label))
+    negative = cleaned.startswith("(") and cleaned.endswith(")")
+    cleaned = cleaned.strip("()")
+    cleaned = re.sub(r"[^0-9.+-]", "", cleaned)
+    try:
+        number = float(cleaned)
+    except ValueError:
+        raise ValueError("Every row needs a numeric {} column".format(label))
+    return -number if negative else number
 
 
 def normalise_sales_rows(rows):
     """Return validated date/product/quantity records from a CSV DictReader."""
     output = []
     aliases = {
-        "date": ("date", "order_date", "sales_date"),
-        "product": ("product", "product_name", "item", "sku"),
-        "quantity": ("quantity", "sales", "sales_quantity", "units_sold", "qty"),
-        "inventory": ("inventory", "stock", "stock_on_hand", "on_hand"),
+        "date": ("date", "order_date", "sales_date", "transaction_date", "invoice_date", "day"),
+        "product": ("product", "product_name", "item", "item_name", "sku", "sku_name", "product_title", "description"),
+        "quantity": ("quantity", "sales", "sales_quantity", "units_sold", "units", "qty", "amount_sold", "demand", "volume"),
+        "inventory": ("inventory", "stock", "stock_on_hand", "on_hand", "onhand", "available_stock", "closing_stock", "ending_inventory"),
     }
+    alias_sets = {name: set(values) for name, values in aliases.items()}
     for raw in rows:
-        row = {(key or "").strip().lower(): (value or "").strip() for key, value in raw.items()}
+        row = {normalise_header(key): (value or "").strip() for key, value in raw.items() if key}
+
         def field(name):
-            return next((row[key] for key in aliases[name] if row.get(key)), "")
+            direct = next((row[key] for key in aliases[name] if row.get(key)), "")
+            if direct:
+                return direct
+            # Accommodate headers such as "Total Units Sold" or "Product (SKU)".
+            candidates = [
+                value for key, value in row.items()
+                if value and any(alias in key or key in alias for alias in alias_sets[name])
+            ]
+            return candidates[0] if candidates else ""
+
+        if not row or not any(row.values()):
+            continue
+        if not field("date"):
+            raise ValueError("Could not find a date column. Rename it to Date or Order Date.")
+        if not field("product"):
+            raise ValueError("Could not find a product column. Rename it to Product, Item, or SKU.")
+        if not field("quantity"):
+            raise ValueError("Could not find a sales column. Rename it to Quantity, Sales, Units Sold, or Qty.")
         date = parse_date(field("date"))
         product = field("product")
-        if not product:
-            raise ValueError("Every row needs a Product column")
-        try:
-            quantity = float(field("quantity"))
-        except ValueError:
-            raise ValueError("Every row needs a numeric Quantity/Sales column")
+        quantity = parse_number(field("quantity"), "Quantity/Sales")
         inventory_value = field("inventory")
-        try:
-            inventory = float(inventory_value) if inventory_value else None
-        except ValueError:
-            inventory = None
+        inventory = parse_number(inventory_value, "Inventory") if inventory_value else None
         if quantity < 0:
             raise ValueError("Sales quantity cannot be negative")
+        if inventory is not None and inventory < 0:
+            raise ValueError("Inventory cannot be negative")
         output.append({"date": date.isoformat(), "product": product[:120], "quantity": quantity, "inventory": inventory})
     if not output:
         raise ValueError("The CSV did not contain any sales rows")
