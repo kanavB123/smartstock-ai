@@ -3,5 +3,6 @@ __pycache__/
 .env
 .venv/
 data/*.db
+data/*.db-*
 data/uploads/
 
