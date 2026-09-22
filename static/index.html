@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="SmartStock AI — source-grounded inventory intelligence." />
+    <title>SmartStock AI</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  </head>
+  <body>
+    <!-- Auth Overlay -->
+    <div id="auth" class="auth-overlay">
+      <div class="auth-card">
+        <h2>Welcome to SmartStock</h2>
+        <p class="auth-subtitle">Login or create a new workspace.</p>
+        <div class="auth-tabs">
+          <button id="tabLogin" class="active">Login</button>
+          <button id="tabRegister">Register</button>
+        </div>
+        
+        <form id="authForm" class="auth-form">
+          <input type="text" id="authOrgName" placeholder="Organization Name" style="display:none;" />
+          <input type="text" id="authName" placeholder="Your Name" style="display:none;" />
+          <input type="email" id="authEmail" placeholder="Email Address" required />
+          <input type="password" id="authPassword" placeholder="Password" required />
+          <button type="submit" id="authSubmit" class="auth-submit">Login</button>
+          <div id="authError" class="auth-error"></div>
+        </form>
+        
+        <a id="demoLink" class="auth-demo-link">Continue as demo</a>
+      </div>
+    </div>
+
+    <div class="app-shell">
+      <aside class="sidebar">
+        <a class="brand" href="#dashboard"><span class="brand-mark">S</span><span>SmartStock <small>AI</small></span></a>
+        <div class="workspace-label">WORKSPACE <span class="workspace-dot"></span></div>
+        <nav aria-label="Primary navigation">
+          <button class="nav-item active" data-view="dashboard"><span>▦</span> Overview</button>
+          <button class="nav-item" data-view="data"><span>↑</span> Data hub</button>
+          <button class="nav-item" data-view="intelligence"><span>◎</span> Intelligence</button>
+          <button class="nav-item" data-view="assistant"><span>✦</span> AI assistant</button>
+        </nav>
+        <div class="sidebar-footer">
+          <div class="secure-note"><span>⌁</span><div><strong>Private workspace</strong><small>Data stays scoped to your organization</small></div></div>
+          <button class="demo-side" id="demoButton"><span>↗</span> Load demo data</button>
+        </div>
+      </aside>
+
+      <main class="workspace-main">
+        <header class="workspace-header">
+          <div class="mobile-brand"><span class="brand-mark">S</span> SmartStock</div>
+          <div class="header-right">
+            <span id="status" class="status"><i></i> Workspace empty</span>
+            <div class="header-auth">
+              <span id="headerOrg" class="header-org"></span>
+              <button id="authBtn" class="auth-btn">Login</button>
+            </div>
+            <div id="avatar" class="avatar">KS</div>
+          </div>
+        </header>
+
+        <section id="dashboard" class="view active-view" aria-labelledby="overview-title">
+          <div class="view-intro"><div><p class="eyebrow">OVERVIEW</p><h1 id="overview-title">Good morning, Kanav.</h1><p>Here is the current state of your inventory operations.</p></div><button class="button primary" id="dashboardDemo">Load demo workspace <span>→</span></button></div>
+          <section class="metrics" aria-label="Key performance metrics">
+            <article><span>Total units sold</span><strong id="totalSales">—</strong><small>Across uploaded records</small></article>
+            <article><span>Active products</span><strong id="totalProducts">—</strong><small>With demand forecasts</small></article>
+            <article><span>Reorder signals</span><strong id="reorderAlerts">—</strong><small>Need attention today</small></article>
+            <article><span>Knowledge sources</span><strong id="documentCount">—</strong><small>Available to assistant</small></article>
+          </section>
+          <section class="dashboard-head">
+            <div><h2>Demand & replenishment</h2><p>Projected product demand for the next two weeks.</p></div>
+            <div class="action-row">
+              <span class="method-badge">14-day trend forecast</span>
+              <button id="downloadPdfBtn" class="btn-secondary"><span>↓</span> Download briefing</button>
+            </div>
+          </section>
+          <section class="dashboard-grid">
+            <article class="panel chart-panel">
+              <div class="panel-heading"><div><h3>Forecast by product</h3><p>Projected units over the next 14 days</p></div></div>
+              <div class="chart-container">
+                <canvas id="forecastCanvas"></canvas>
+              </div>
+            </article>
+            <article class="panel alert-panel"><div class="panel-heading"><div><h3>Reorder queue</h3><p>Products needing attention</p></div><span class="alert-dot"></span></div><div id="reorderList" class="empty-state">No inventory signals yet.</div></article>
+            
+            <article class="panel trend-panel">
+              <div class="panel-heading"><div><h3>Sales trend</h3><p>Historical sales and forecast projection</p></div></div>
+              <div class="chart-container">
+                <canvas id="trendCanvas"></canvas>
+              </div>
+            </article>
+
+            <article class="panel wide-table"><div class="panel-heading"><div><h3>Product health</h3><p>Forecast and stock cover at a glance</p></div></div><div class="table-scroll"><table><thead><tr><th>PRODUCT</th><th>DAILY AVG.</th><th>14-DAY FORECAST</th><th>ON HAND</th><th>STATUS</th></tr></thead><tbody id="productTable"><tr><td colspan="5" class="muted-cell">Waiting for sales data.</td></tr></tbody></table></div></article>
+            <article class="panel anomaly-panel"><div class="panel-heading"><div><h3>Unusual demand</h3><p>Statistical spikes worth checking</p></div></div><div id="anomalyList" class="empty-state">No data to analyse yet.</div></article>
+          </section>
+        </section>
+
+        <section id="data" class="view" aria-labelledby="data-title">
+          <div class="view-intro">
+            <div><p class="eyebrow">DATA HUB</p><h1 id="data-title">Bring your data together.</h1><p>Upload sales data for forecasting and business documents for grounded answers.</p></div>
+            <div class="action-row">
+              <span class="data-badge"><i></i><span id="dataReady">No data loaded</span></span>
+              <button id="exportCsvBtn" class="btn-secondary"><span>↓</span> Export sales CSV</button>
+            </div>
+          </div>
+          <section class="upload-grid">
+            <article class="panel upload-card accent-green"><div class="card-icon">↗</div><div class="section-title"><div><h2>Sales data</h2><p>CSV with Date, Product and Quantity/Sales. Inventory is optional.</p></div></div>
+              <div class="mode-toggle">
+                <button class="active" data-mode="replace">Replace</button>
+                <button data-mode="append">Append</button>
+              </div>
+              <label class="drop-zone"><input id="salesFile" type="file" accept=".csv" /><span class="upload-icon">↑</span><strong>Choose sales CSV</strong><small>Maximum 5 MB</small></label><p id="salesMessage" class="upload-message"></p>
+            </article>
+            <article class="panel upload-card accent-orange"><div class="card-icon warm">▤</div><div class="section-title"><div><h2>Knowledge base</h2><p>Supplier policies, product notes, and replenishment guides.</p></div></div><label class="drop-zone warm-zone"><input id="documentFile" type="file" accept=".txt,.md,.csv,.pdf" /><span class="upload-icon">↑</span><strong>Choose knowledge file</strong><small>.txt, .md, .csv, .pdf · Maximum 2 MB</small></label><p id="documentMessage" class="upload-message"></p></article>
+          </section>
+          <section class="panel info-panel"><div class="info-illustration"><span>01</span><span>02</span><span>03</span></div><div><p class="eyebrow">HOW IT WORKS</p><h2>Data in. Decisions out.</h2><p>Sales rows drive the dashboard’s forecasts, reorder signals, and anomaly detection. Documents are chunked and retrieved only when they support a question in the assistant.</p></div><div class="format-list"><strong>Accepted sales columns</strong><code>Date</code><code>Product</code><code>Quantity / Sales</code><code>Inventory <em>optional</em></code></div></section>
+        </section>
+
+        <section id="intelligence" class="view" aria-labelledby="intelligence-title">
+          <div class="view-intro">
+            <div>
+              <p class="eyebrow">INTELLIGENCE</p>
+              <h1 id="intelligence-title">Smart planning, fewer surprises.</h1>
+              <p>Backtesting accuracy, replenishment recommendations, and operational alerts.</p>
+            </div>
+          </div>
+          <div class="intelligence-grid">
+            <article class="panel accuracy-card">
+              <div class="panel-heading">
+                <div>
+                  <h3>Forecast accuracy</h3>
+                  <p>Model comparison via 30-day backtesting</p>
+                </div>
+              </div>
+              <div id="accuracyContent">
+                <div class="empty-state" style="height:150px">No accuracy data available.</div>
+              </div>
+            </article>
+            <article class="panel alerts-panel">
+              <div class="panel-heading">
+                <div>
+                  <h3>Operational alerts</h3>
+                  <p>Anomalies and supply chain events</p>
+                </div>
+              </div>
+              <div id="alertsContent">
+                <div class="empty-state" style="height:150px">No operational alerts.</div>
+              </div>
+            </article>
+            <article class="panel recommendations-table wide-table">
+              <div class="panel-heading">
+                <div>
+                  <h3>Purchase order recommendations</h3>
+                  <p>Suggested orders based on safety stock and lead times</p>
+                </div>
+              </div>
+              <div class="table-scroll">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>PRODUCT</th>
+                      <th>PRIORITY</th>
+                      <th>INVENTORY</th>
+                      <th>SAFETY STOCK</th>
+                      <th>TARGET STOCK</th>
+                      <th>ORDER QTY</th>
+                      <th>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody id="recommendationsTable">
+                    <tr><td colspan="7" class="muted-cell">Waiting for intelligence data.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section id="assistant" class="view" aria-labelledby="assistant-title">
+          <div class="view-intro"><div><p class="eyebrow">RAG KNOWLEDGE ASSISTANT</p><h1 id="assistant-title">Ask with confidence.</h1><p>Answers are grounded in your uploaded documents and live product analysis.</p></div><span class="data-badge"><i></i> Source-cited answers</span></div>
+          <section class="assistant-layout">
+            <aside class="assistant-side"><h2>Try a question</h2><p>Use policies for operational context, or ask about the sales data currently in your workspace.</p><div class="suggestions"><button data-question="What are the lead times and minimum order quantities?">Lead times & MOQs <span>→</span></button><button data-question="When should we raise a reorder recommendation?">Reorder policy <span>→</span></button><button data-question="What is the 14-day forecast for Mechanical Keyboard?">Product forecast <span>→</span></button><button data-question="Which product responds to weekend promotions?">Product notes <span>→</span></button></div><div class="grounding-card"><span>✦</span><p><strong>Grounded by design</strong> The assistant returns only supporting sources from your workspace.</p></div></aside>
+            <article class="chat-window"><div class="chat-top"><span class="assistant-orb">✦</span><div><strong>SmartStock assistant</strong><small>Operations knowledge partner</small></div><span class="privacy">Private workspace</span></div>
+            <div id="chatAnswer" class="chat-answer chat-messages">
+              <div class="welcome-orb" style="margin:0 auto">✦</div>
+              <h2 style="text-align:center">What can I help you find?</h2>
+              <p style="text-align:center;margin:0 auto">Ask about supplier lead times, stock cover, forecasts, replenishment policy, or a specific product.</p>
+            </div>
+            <div class="chat-input"><input id="question" placeholder="Ask about suppliers, policies or products..." /><button id="askButton" aria-label="Ask question">Send <span>↑</span></button></div></article>
+          </section>
+        </section>
+      </main>
+    </div>
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+.venv
+.env
+.git
+.gitignore
+data/*.db
+outputs/
+work/
+__pycache__
+*.pyc
+*.pyo
+README.md
+tests/
+.dockerignore
