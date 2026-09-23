@@ -1,5 +1,7 @@
 # SmartStock AI
 
+**Live Demo:** [https://smartstock-ai-360w.onrender.com](https://smartstock-ai-360w.onrender.com)
+
 SmartStock AI is a deployable final-year B.Tech project that combines sales forecasting, anomaly detection, inventory recommendations, and a citation-based RAG assistant.
 
 ## What is implemented
