@@ -54,6 +54,7 @@
           <div class="mobile-brand"><span class="brand-mark">S</span> SmartStock</div>
           <div class="header-right">
             <span id="status" class="status"><i></i> Workspace empty</span>
+            <button id="themeToggle" class="theme-toggle" aria-label="Toggle light and dark mode">🌙</button>
             <div class="header-auth">
               <span id="headerOrg" class="header-org"></span>
               <button id="authBtn" class="auth-btn">Login</button>
@@ -113,7 +114,10 @@
                 <button class="active" data-mode="replace">Replace</button>
                 <button data-mode="append">Append</button>
               </div>
-              <label class="drop-zone"><input id="salesFile" type="file" accept=".csv" /><span class="upload-icon">↑</span><strong>Choose sales CSV</strong><small>Maximum 5 MB</small></label><p id="salesMessage" class="upload-message"></p>
+              <label class="drop-zone"><input id="salesFile" type="file" accept=".csv" /><span class="upload-icon">↑</span><strong>Choose sales CSV</strong><small>Maximum 5 MB · works with common spreadsheet exports</small></label>
+              <p id="salesMessage" class="upload-message"></p>
+              <div id="salesPreview" class="upload-preview" style="display:none; margin-top:10px;"></div>
+              <div class="format-list" style="margin-top:8px;"><strong>Accepted formats</strong><code>Date</code><code>Product</code><code>Quantity / Sales</code><code>Inventory optional</code><code>Comma / semicolon CSV</code></div>
             </article>
             <article class="panel upload-card accent-orange"><div class="card-icon warm">▤</div><div class="section-title"><div><h2>Knowledge base</h2><p>Supplier policies, product notes, and replenishment guides.</p></div></div><label class="drop-zone warm-zone"><input id="documentFile" type="file" accept=".txt,.md,.csv,.pdf" /><span class="upload-icon">↑</span><strong>Choose knowledge file</strong><small>.txt, .md, .csv, .pdf · Maximum 2 MB</small></label><p id="documentMessage" class="upload-message"></p></article>
           </section>
@@ -249,12 +253,12 @@
           <section class="assistant-layout">
             <aside class="assistant-side"><h2>Try a question</h2><p>Use policies for operational context, or ask about the sales data currently in your workspace.</p><div class="suggestions"><button data-question="What are the lead times and minimum order quantities?">Lead times & MOQs <span>→</span></button><button data-question="When should we raise a reorder recommendation?">Reorder policy <span>→</span></button><button data-question="What is the 14-day forecast for Mechanical Keyboard?">Product forecast <span>→</span></button><button data-question="Which product responds to weekend promotions?">Product notes <span>→</span></button></div><div class="grounding-card"><span>✦</span><p><strong>Grounded by design</strong> The assistant returns only supporting sources from your workspace.</p></div></aside>
             <article class="chat-window"><div class="chat-top"><span class="assistant-orb">✦</span><div><strong>SmartStock assistant</strong><small>Operations knowledge partner</small></div><button class="btn-secondary" style="margin-left:auto;padding:4px 8px;font-size:10px" onclick="clearChat()">Clear chat</button></div>
-            <div id="chatAnswer" class="chat-answer chat-messages">
+            <div id="chatAnswer" class="chat-answer chat-messages" role="log" aria-live="polite" aria-relevant="additions text">
               <div class="welcome-orb" style="margin:0 auto">✦</div>
               <h2 style="text-align:center">What can I help you find?</h2>
               <p style="text-align:center;margin:0 auto">Ask about supplier lead times, stock cover, forecasts, replenishment policy, or a specific product.</p>
             </div>
-            <div class="chat-input"><input id="question" placeholder="Ask about suppliers, policies or products..." /><button id="askButton" aria-label="Ask question">Send <span>↑</span></button></div></article>
+            <div class="chat-input"><input id="question" aria-label="Ask SmartStock a question" placeholder="Ask about suppliers, policies or products..." /><button id="askButton" type="button" aria-label="Ask question">Send <span>↑</span></button></div></article>
           </section>
         </section>
       </main>

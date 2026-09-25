@@ -1,6 +1,9 @@
 """Pure analysis and retrieval helpers for SmartStock AI."""
+import csv
+import io
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
+from difflib import SequenceMatcher
 import math
 import re
 
@@ -37,41 +40,176 @@ def query_terms(query):
 
 
 def parse_date(value):
-    """Accept the two most common spreadsheet date formats."""
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+    """Accept common spreadsheet date formats and numeric Excel serials."""
+    if value is None:
+        raise ValueError("Date missing from the CSV")
+    value = str(value).strip()
+    if not value:
+        raise ValueError("Date missing from the CSV")
+
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y", "%m-%d-%Y"):
         try:
-            return datetime.strptime(value.strip(), fmt).date()
-        except (ValueError, AttributeError):
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
             continue
-    raise ValueError("Date must be YYYY-MM-DD, DD/MM/YYYY, or MM/DD/YYYY")
+
+    try:
+        numeric = float(value)
+        if numeric > 0:
+            origin = datetime(1899, 12, 30)
+            return (origin + timedelta(days=numeric)).date()
+    except ValueError:
+        pass
+
+    raise ValueError("Date must be YYYY-MM-DD, YYYY/MM/DD, DD/MM/YYYY, MM/DD/YYYY, or a readable Excel date value.")
+
+
+SALES_COLUMN_ALIASES = {
+    "date": ("date", "order date", "sales date", "transaction date", "date of transaction", "date of sale", "sale date", "order_date", "sales_date"),
+    "product": ("product", "product name", "product description", "item", "item name", "item description", "product title", "sku", "product_name"),
+    "quantity": (
+        "quantity", "sales", "sales quantity", "sales qty", "units sold", "units_sold",
+        "qty", "sales_quantity", "sales_qty", "qty sold", "quantity sold", "units", "unit",
+        "units purchased", "number of units", "total quantity", "purchase quantity", "items sold",
+        "unit sales", "total units sold"
+    ),
+    "inventory": (
+        "inventory", "stock", "stock on hand", "on hand", "stock_on_hand", "on_hand", "stock onhand",
+        "closing stock", "closing inventory", "available stock", "quantity on hand", "qty on hand",
+        "current stock", "ending inventory"
+    ),
+}
+
+
+def _canonical_field_name(raw_name):
+    value = (raw_name or "").strip().lower().replace("-", " ").replace("_", " ")
+    value = " ".join(value.split())
+    return value
+
+
+def infer_sales_column_mapping(fieldnames):
+    """Map CSV headers to canonical fields, accepting only clear near matches."""
+    normalized = {_canonical_field_name(name): name for name in fieldnames if name}
+    mapping = {}
+    used_headers = set()
+    for standard_name, aliases in SALES_COLUMN_ALIASES.items():
+        exact_matches = [alias for alias in normalized if alias in aliases]
+        if len(exact_matches) == 1:
+            mapping[standard_name] = normalized[exact_matches[0]]
+            used_headers.add(exact_matches[0])
+        elif len(exact_matches) > 1:
+            used_headers.update(exact_matches)
+
+    for standard_name, aliases in SALES_COLUMN_ALIASES.items():
+        if standard_name in mapping:
+            continue
+        candidates = []
+        for normalized_header, original_header in normalized.items():
+            if normalized_header in used_headers:
+                continue
+            score = max(SequenceMatcher(None, normalized_header, alias).ratio() for alias in aliases)
+            candidates.append((score, normalized_header, original_header))
+        candidates.sort(reverse=True)
+        if not candidates or candidates[0][0] < 0.82:
+            continue
+        if len(candidates) > 1 and candidates[0][0] - candidates[1][0] < 0.05:
+            continue
+        mapping[standard_name] = candidates[0][2]
+        used_headers.add(candidates[0][1])
+    return mapping
+
+
+def _detect_csv_dialect(sample_text):
+    sample = sample_text[:4096]
+    for delimiter in (",", ";", "\t"):
+        try:
+            rows = list(csv.reader(io.StringIO(sample), delimiter=delimiter))
+        except csv.Error:
+            continue
+        if len(rows) < 2:
+            continue
+        header = [cell.strip() for cell in rows[0]]
+        if any(cell for cell in header):
+            if delimiter == "," and len(header) == 1:
+                continue
+            return delimiter
+    return ","
+
+
+def parse_sales_csv_text(text):
+    """Parse arbitrary sales CSV text into normalized rows."""
+    if not text or not text.strip():
+        raise ValueError("The uploaded CSV is empty.")
+    dialect = _detect_csv_dialect(text)
+    reader = csv.DictReader(io.StringIO(text), dialect=csv.excel if dialect == "," else None)
+    if dialect != ",":
+        reader = csv.DictReader(io.StringIO(text), delimiter=dialect)
+    rows = list(reader)
+    if not rows:
+        raise ValueError("The CSV did not contain any rows.")
+    return normalise_sales_rows(rows)
+
+
+def sales_csv_column_mapping(text):
+    """Return the detected header-to-field mapping for upload feedback."""
+    if not text or not text.strip():
+        return {}
+    delimiter = _detect_csv_dialect(text)
+    headers = next(csv.reader(io.StringIO(text), delimiter=delimiter), [])
+    return infer_sales_column_mapping(headers)
+
+
+def _parse_sales_number(value):
+    """Parse common spreadsheet numbers with currency symbols and thousands commas."""
+    cleaned = re.sub(r"[,\s$₹€£¥]", "", str(value or "").strip())
+    if cleaned.startswith("(") and cleaned.endswith(")"):
+        cleaned = "-{}".format(cleaned[1:-1])
+    return float(cleaned)
 
 
 def normalise_sales_rows(rows):
     """Return validated date/product/quantity records from a CSV DictReader."""
     output = []
-    aliases = {
-        "date": ("date", "order_date", "sales_date"),
-        "product": ("product", "product_name", "item", "sku"),
-        "quantity": ("quantity", "sales", "sales_quantity", "units_sold", "qty"),
-        "inventory": ("inventory", "stock", "stock_on_hand", "on_hand"),
-    }
-    for raw in rows:
-        row = {(key or "").strip().lower(): (value or "").strip() for key, value in raw.items()}
+    rows = list(rows)
+    headers = list(dict.fromkeys(key for raw in rows for key in (raw or {}).keys() if key is not None))
+    overall_mapping = infer_sales_column_mapping(headers)
+    for row_number, raw in enumerate(rows, start=2):
+        raw = raw or {}
+        if not any(str(value or "").strip() for value in raw.values()):
+            continue
+        mapping = infer_sales_column_mapping(raw.keys())
+        mapping = {**overall_mapping, **mapping}
+        missing_fields = [name for name in ("date", "product", "quantity") if name not in mapping]
+        if missing_fields:
+            labels = {"date": "Date", "product": "Product", "quantity": "Quantity/Sales"}
+            missing = ", ".join(labels[name] for name in missing_fields)
+            detected = ", ".join(str(header) for header in raw if header)
+            raise ValueError("Could not confidently match {} column(s) on CSV row {}. Detected headers: {}. Rename the closest headers or use Date, Product, Quantity/Sales.".format(missing, row_number, detected or "none"))
+        row = {_canonical_field_name(key): (value or "").strip() for key, value in raw.items() if key is not None}
+
         def field(name):
-            return next((row[key] for key in aliases[name] if row.get(key)), "")
-        date = parse_date(field("date"))
+            header = mapping.get(name)
+            return row.get(_canonical_field_name(header), "") if header else ""
+
+        try:
+            date = parse_date(field("date"))
+        except ValueError as error:
+            raise ValueError("Invalid date on CSV row {}: {}".format(row_number, error)) from error
         product = field("product")
         if not product:
-            raise ValueError("Every row needs a Product column")
+            raise ValueError("Product is blank on CSV row {}. Fill in the product name or SKU.".format(row_number))
         try:
-            quantity = float(field("quantity"))
-        except ValueError:
-            raise ValueError("Every row needs a numeric Quantity/Sales column")
+            quantity = _parse_sales_number(field("quantity"))
+        except ValueError as error:
+            raise ValueError("Quantity/Sales must be numeric on CSV row {} (received {!r}).".format(row_number, field("quantity"))) from error
         inventory_value = field("inventory")
         try:
-            inventory = float(inventory_value) if inventory_value else None
+            inventory = _parse_sales_number(inventory_value) if inventory_value else None
         except ValueError:
-            inventory = None
+            if inventory_value.lower() in ("n/a", "na", "none", "null", "-"):
+                inventory = None
+            else:
+                raise ValueError("Inventory must be numeric on CSV row {} (received {!r}).".format(row_number, inventory_value))
         if quantity < 0:
             raise ValueError("Sales quantity cannot be negative")
         output.append({"date": date.isoformat(), "product": product[:120], "quantity": quantity, "inventory": inventory})

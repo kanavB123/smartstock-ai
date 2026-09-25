@@ -3,6 +3,9 @@ const $ = (selector) => document.querySelector(selector);
 let authToken = sessionStorage.getItem('smartstock_token');
 let currentUser = JSON.parse(sessionStorage.getItem('smartstock_user') || 'null');
 let chatHistory = [];
+let chatRequestId = 0;
+let chatPending = false;
+let copiedAnswerIndex = -1;
 let uploadMode = 'replace';
 let forecastChartInstance = null;
 let trendChartInstance = null;
@@ -44,6 +47,10 @@ function format(value) {
 
 function escapeHtml(value) {
   const div = document.createElement('div'); div.textContent = value; return div.innerHTML;
+}
+
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 }
 
 // Auth Functions
@@ -109,6 +116,42 @@ function logout() {
   refresh();
 }
 
+function applyTheme(theme) {
+  const isDark = theme === 'dark';
+  document.body.classList.toggle('dark-theme', isDark);
+  const toggle = $('#themeToggle');
+  if (toggle) toggle.textContent = isDark ? '☀️' : '🌙';
+  localStorage.setItem('smartstock_theme', theme);
+  updateChartTheme();
+}
+
+function getChartTheme() {
+  const isDark = document.body.classList.contains('dark-theme');
+  return {
+    text: isDark ? '#a7aca5' : COLORS.muted,
+    grid: isDark ? '#3b433d' : COLORS.line,
+    historical: isDark ? '#d0b579' : COLORS.pine,
+    projection: isDark ? '#a4c88b' : COLORS.green
+  };
+}
+
+function updateChartTheme() {
+  if (!window.Chart) return;
+  const theme = getChartTheme();
+  Chart.defaults.color = theme.text;
+  [forecastChartInstance, trendChartInstance].forEach((chart) => {
+    if (!chart) return;
+    chart.options.scales.y.grid.color = theme.grid;
+    chart.options.scales.y.ticks.color = theme.text;
+    chart.options.scales.x.ticks.color = theme.text;
+    if (chart === trendChartInstance) {
+      chart.data.datasets[0].borderColor = theme.historical;
+      chart.data.datasets[1].borderColor = theme.projection;
+    }
+    chart.update('none');
+  });
+}
+
 function showAuth() {
   $('#auth').classList.add('visible');
   $('#authError').textContent = '';
@@ -131,6 +174,7 @@ function renderCharts(products, summary) {
   }
 
   const topProducts = products.slice(0, 6);
+  const chartTheme = getChartTheme();
   const labels = topProducts.map(p => p.product.length > 13 ? p.product.substring(0, 13) + '...' : p.product);
   const data14d = topProducts.map(p => p.forecast_14d);
   
@@ -141,7 +185,7 @@ function renderCharts(products, summary) {
       datasets: [{
         label: '14-Day Forecast',
         data: data14d,
-        backgroundColor: COLORS.green,
+        backgroundColor: chartTheme.projection,
         borderRadius: 4,
         barPercentage: 0.6
       }]
@@ -150,8 +194,8 @@ function renderCharts(products, summary) {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        y: { beginAtZero: true, grid: { color: COLORS.line } },
-        x: { grid: { display: false } }
+        y: { beginAtZero: true, grid: { color: chartTheme.grid }, ticks: { color: chartTheme.text } },
+        x: { grid: { display: false }, ticks: { color: chartTheme.text } }
       },
       plugins: {
         legend: { display: false }
@@ -190,14 +234,14 @@ function renderCharts(products, summary) {
         {
           label: 'Historical Sales',
           data: histData,
-          borderColor: COLORS.pine,
+          borderColor: chartTheme.historical,
           tension: 0.3,
           pointRadius: 0
         },
         {
           label: 'Forecast Projection',
           data: projData,
-          borderColor: COLORS.green,
+          borderColor: chartTheme.projection,
           borderDash: [5, 5],
           tension: 0.3,
           pointRadius: 0
@@ -208,8 +252,8 @@ function renderCharts(products, summary) {
       responsive: true,
       maintainAspectRatio: false,
       scales: {
-        y: { beginAtZero: true, grid: { color: COLORS.line } },
-        x: { grid: { display: false } }
+        y: { beginAtZero: true, grid: { color: chartTheme.grid }, ticks: { color: chartTheme.text } },
+        x: { grid: { display: false }, ticks: { color: chartTheme.text } }
       },
       plugins: {
         legend: { display: false }
@@ -314,22 +358,64 @@ async function clearDemo() {
   } catch (error) { alert(error.message); }
 }
 
+async function previewSalesCsv(file) {
+  const previewNode = $('#salesPreview');
+  if (!file) {
+    previewNode.style.display = 'none';
+    previewNode.innerHTML = '';
+    return null;
+  }
+
+  const form = new FormData();
+  form.append('file', file);
+  const preview = await request('/api/sales/preview', { method: 'POST', body: form });
+  const mapping = preview.mapping || [];
+  const expected = { Date: 'date', Product: 'product', 'Quantity/Sales': 'quantity', Inventory: 'inventory' };
+  const autoMatches = mapping.filter(item => item.header.toLowerCase().replace(/[_-]/g, ' ').trim() !== expected[item.field]);
+  const mappingHtml = mapping.map(item => `<span class="csv-map-chip">${escapeHtml(item.header)} <b>→</b> ${escapeHtml(item.field)}</span>`).join('');
+  const previewRows = (preview.preview || []).map(row => `
+    <tr><td>${escapeHtml(row.date)}</td><td>${escapeHtml(row.product)}</td><td>${escapeHtml(String(row.quantity))}</td><td>${escapeHtml(row.inventory == null ? '—' : String(row.inventory))}</td></tr>
+  `).join('');
+  previewNode.innerHTML = `
+    <div class="csv-preview-summary"><strong>${format(preview.rows)} valid rows</strong><span>Dates, headers, and formatted numbers are normalized automatically.</span></div>
+    <div class="csv-mapping-list">${mappingHtml}</div>
+    <div class="table-scroll"><table class="csv-preview-table"><thead><tr><th>DATE</th><th>PRODUCT</th><th>QUANTITY</th><th>INVENTORY</th></tr></thead><tbody>${previewRows}</tbody></table></div>
+  `;
+  previewNode.style.display = 'block';
+  return { ...preview, autoMatches };
+}
+
 async function upload(input, url, messageNode) {
   const file = input.files[0]; if (!file) return;
-  messageNode.textContent = `Processing ${file.name}…`; messageNode.className = 'upload-message';
-  const form = new FormData(); 
-  form.append('file', file);
-  if (url === '/api/sales') form.append('mode', uploadMode);
+  input.disabled = true;
+  messageNode.textContent = `Checking ${file.name} and matching its columns…`;
+  messageNode.className = 'upload-message';
   try {
+    let preview = null;
+    if (url === '/api/sales') preview = await previewSalesCsv(file);
+    const form = new FormData();
+    form.append('file', file);
+    if (url === '/api/sales') form.append('mode', uploadMode);
+    messageNode.textContent = url === '/api/sales' ? `Validated ${format(preview.rows)} rows. Uploading…` : `Reading ${file.name}…`;
     const result = await request(url, { method: 'POST', body: form });
-    messageNode.textContent = result.message + (result.rows ? `: ${result.rows} records.` : (result.chunks ? `: ${result.chunks} chunks.` : ''));
+    const autoMatchNote = preview?.autoMatches.length
+      ? ` Auto-matched: ${preview.autoMatches.map(item => `${item.header} → ${item.field}`).join(', ')}.`
+      : '';
+    messageNode.textContent = result.message + (result.rows ? `: ${format(result.rows)} records.` : (result.chunks ? `: ${result.chunks} chunks.` : '')) + autoMatchNote;
     messageNode.className = 'upload-message success'; 
     await refresh();
-  } catch (error) { 
-    messageNode.textContent = error.message; 
-    messageNode.className = 'upload-message error'; 
+  } catch (error) {
+    messageNode.textContent = error.message;
+    messageNode.className = 'upload-message error';
+    const previewNode = $('#salesPreview');
+    if (url === '/api/sales') {
+      previewNode.innerHTML = `<div class="csv-preview-error"><strong>We couldn’t safely prepare this file.</strong><span>${escapeHtml(error.message)}</span><small>Fix the indicated row or adjust its header, then choose the file again. Your existing data was not changed.</small></div>`;
+      previewNode.style.display = 'block';
+    }
+  } finally {
+    input.disabled = false;
+    input.value = '';
   }
-  input.value = '';
 }
 
 async function downloadPDF() {
@@ -365,14 +451,54 @@ async function exportCSV() {
 }
 
 // Multi-turn chat
+function getChatGreeting() {
+  const hour = new Date().getHours();
+  const salutation = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const firstName = currentUser?.name?.trim().split(/\s+/)[0];
+  return firstName ? `${salutation}, ${firstName}.` : `${salutation}.`;
+}
+
+function getGreetingReply() {
+  const firstName = currentUser?.name?.trim().split(/\s+/)[0];
+  return firstName
+    ? `Hi, ${firstName}! What would you like to look into today?`
+    : 'Hi! What would you like to look into today?';
+}
+
+function isStandaloneGreeting(value) {
+  return /^(?:hi|hello|hey|good\s+(?:morning|afternoon|evening))(?:[,.!\s]+(?:there|smartstock|assistant|team|everyone))?[,.!\s]*$/i.test(value);
+}
+
+function getDefaultFollowUps(question, answer) {
+  const query = question.toLowerCase();
+  const response = answer.toLowerCase();
+  if (/lead time|supplier|minimum order|\bmoq\b/.test(query)) {
+    return ['Which product has the longest supplier lead time?', 'What are the minimum order quantities for each product?'];
+  }
+  if (/forecast|demand|sales|promotion/.test(query)) {
+    return ['Which products need reordering right now?', 'How does forecast demand compare with stock on hand?'];
+  }
+  if (/reorder|stock|inventory|on hand/.test(query)) {
+    return ['Which products need attention first?', 'How much safety stock should we hold?'];
+  }
+  if (/could not find supporting|no supporting information/.test(response)) return [];
+  return ['What should I look at next in my inventory?', 'Can you summarize the relevant policy?'];
+}
+
 function renderChat() {
   const container = $('#chatAnswer');
   if (chatHistory.length === 0) {
     container.innerHTML = `
       <div class="welcome-orb" style="margin:0 auto">✦</div>
-      <h2 style="text-align:center">What can I help you find?</h2>
-      <p style="text-align:center;margin:0 auto">Ask about supplier lead times, stock cover, forecasts, replenishment policy, or a specific product.</p>
+      <h2 class="welcome-title">${escapeHtml(getChatGreeting())}</h2>
+      <p class="welcome-copy">What would you like to explore? I can help with supplier policies, stock risks, and product forecasts.</p>
+      <div class="welcome-prompts" aria-label="Suggested questions">
+        <button data-chat-action="ask" data-question="Which products need reordering right now?">Check reorder risks <span>→</span></button>
+        <button data-chat-action="ask" data-question="What are the supplier lead times and minimum order quantities?">Supplier lead times <span>→</span></button>
+        <button data-chat-action="ask" data-question="What is the 14-day forecast for Mechanical Keyboard?">Explore a forecast <span>→</span></button>
+      </div>
     `;
+    requestAnimationFrame(() => { container.scrollTop = 0; });
     return;
   }
   
@@ -382,44 +508,55 @@ function renderChat() {
     } else {
       let sourcesHtml = '';
       if (msg.sources && msg.sources.length) {
-        sourcesHtml = `<ul class="source-list">${msg.sources.map(s => `<li>↗ ${escapeHtml(s.name)} · chunk ${s.chunk}</li>`).join('')}</ul>`;
+        sourcesHtml = `<details class="source-details"><summary>${msg.sources.length} supporting ${msg.sources.length === 1 ? 'source' : 'sources'}</summary><ul class="source-list">${msg.sources.map(s => `<li><strong>${escapeHtml(s.name)}</strong><small>Chunk ${escapeHtml(String(s.chunk))}</small>${s.excerpt ? `<p>${escapeHtml(s.excerpt)}</p>` : ''}</li>`).join('')}</ul></details>`;
       }
       
       let followUpsHtml = '';
       if (msg.follow_ups && msg.follow_ups.length) {
         followUpsHtml = `<div class="follow-up-chips">
-          ${msg.follow_ups.map(f => `<button onclick="ask('${escapeHtml(f.replace(/'/g, "\\'"))}')">${escapeHtml(f)} <span>→</span></button>`).join('')}
+          ${msg.follow_ups.map(f => `<button data-chat-action="ask" data-question="${escapeAttribute(f)}">${escapeHtml(f)} <span>→</span></button>`).join('')}
         </div>`;
       }
       
       const isLast = index === chatHistory.length - 1;
       let feedbackHtml = '';
-      if (isLast && !msg.loading && !msg.error) {
+      if (!msg.loading && !msg.error && !msg.conversationOnly) {
+        const copied = copiedAnswerIndex === index;
+        const rating = msg.rating;
         feedbackHtml = `
           <div class="chat-feedback" data-index="${index}">
-            <button class="upvote" onclick="sendFeedback('${escapeHtml(msg.question.replace(/'/g, "\\'"))}', 1)">👍</button>
-            <button class="downvote" onclick="sendFeedback('${escapeHtml(msg.question.replace(/'/g, "\\'"))}', -1)">👎</button>
+            <button data-chat-action="copy" data-index="${index}" aria-label="Copy answer">${copied ? 'Copied' : msg.copyError ? 'Copy unavailable' : 'Copy'}</button>
+            <button class="upvote${rating === 1 ? ' voted' : ''}" data-chat-action="feedback" data-index="${index}" data-rating="1" aria-label="Helpful answer" ${rating ? 'disabled' : ''}>👍</button>
+            <button class="downvote${rating === -1 ? ' voted' : ''}" data-chat-action="feedback" data-index="${index}" data-rating="-1" aria-label="Not helpful" ${rating ? 'disabled' : ''}>👎</button>
           </div>
         `;
       }
-      // Render markdown if marked is available, else raw HTML
+      if (msg.loading) {
+        return `<div class="chat-bubble assistant chat-loading" role="status"><span class="typing-dots" aria-hidden="true"><i></i><i></i><i></i></span>${escapeHtml(msg.content)}</div>`;
+      }
       const htmlContent = window.marked ? marked.parse(msg.content) : `<p>${escapeHtml(msg.content)}</p>`;
-      return `<div class="chat-bubble assistant">${htmlContent}${sourcesHtml}${followUpsHtml}${feedbackHtml}</div>`;
+      const retryHtml = msg.error && msg.question ? `<button class="chat-retry" data-chat-action="retry" data-index="${index}">Try again</button>` : '';
+      const noSourceAction = !msg.conversationOnly && msg.sources && msg.sources.length === 0
+        ? '<button class="chat-retry" data-chat-action="view" data-view="data">Review workspace sources</button>'
+        : '';
+      return `<div class="chat-bubble assistant${msg.error ? ' chat-error' : ''}">${htmlContent}${retryHtml}${noSourceAction}${sourcesHtml}${followUpsHtml}${feedbackHtml}</div>`;
     }
   }).join('');
   
-  container.scrollTop = container.scrollHeight;
+  requestAnimationFrame(() => { container.scrollTop = container.scrollHeight; });
 }
 
-window.sendFeedback = async function(question, rating) {
+async function sendFeedback(index, rating) {
+  const msg = chatHistory[index];
+  if (!msg || !msg.question || msg.rating) return;
   try {
     await request('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, rating: parseInt(rating, 10), comment: '' }),
+      body: JSON.stringify({ question: msg.question, rating: parseInt(rating, 10), comment: '' }),
     });
-    const buttons = document.querySelectorAll('.chat-feedback button');
-    buttons.forEach(btn => btn.classList.add('voted'));
+    msg.rating = parseInt(rating, 10);
+    renderChat();
   } catch (e) {
     console.error('Feedback error', e);
   }
@@ -428,7 +565,21 @@ window.sendFeedback = async function(question, rating) {
 async function ask(questionText) {
   const field = $('#question'); 
   const value = (questionText || field.value).trim(); 
-  if (!value) return;
+  if (!value || chatPending) return;
+  if (isStandaloneGreeting(value)) {
+    chatHistory.push({ role: 'user', content: value });
+    chatHistory.push({
+      role: 'assistant',
+      content: getGreetingReply(),
+      conversationOnly: true,
+      follow_ups: ['Which products need reordering right now?', 'What are the supplier lead times and minimum order quantities?']
+    });
+    field.value = '';
+    renderChat();
+    return;
+  }
+  const requestId = ++chatRequestId;
+  chatPending = true;
   
   // Create history payload without the new question
   const historyPayload = chatHistory
@@ -436,9 +587,10 @@ async function ask(questionText) {
     .map(msg => ({ role: msg.role, content: msg.content }));
   
   chatHistory.push({ role: 'user', content: value });
-  chatHistory.push({ role: 'assistant', content: 'Finding supporting sources…', loading: true });
+  chatHistory.push({ role: 'assistant', content: 'Searching your workspace and checking supporting sources…', loading: true, requestId, question: value });
   renderChat();
   $('#askButton').disabled = true;
+  $('#askButton').setAttribute('aria-label', 'Finding an answer');
   field.value = '';
   
   try {
@@ -448,29 +600,90 @@ async function ask(questionText) {
       body: JSON.stringify({ question: value, history: historyPayload }) 
     });
     
-    chatHistory[chatHistory.length - 1] = {
+    const loadingIndex = chatHistory.findIndex(msg => msg.requestId === requestId);
+    if (requestId !== chatRequestId || loadingIndex < 0) return;
+    chatHistory[loadingIndex] = {
       role: 'assistant',
       content: result.answer,
       sources: result.sources || [],
-      follow_ups: result.follow_ups || [],
+      follow_ups: result.sources && result.sources.length
+        ? Array.isArray(result.follow_ups) && result.follow_ups.length
+          ? result.follow_ups.filter(item => typeof item === 'string').slice(0, 2)
+          : getDefaultFollowUps(value, result.answer)
+        : [],
       question: value
     };
   } catch (error) { 
-    chatHistory[chatHistory.length - 1] = {
+    const loadingIndex = chatHistory.findIndex(msg => msg.requestId === requestId);
+    if (requestId !== chatRequestId || loadingIndex < 0) return;
+    chatHistory[loadingIndex] = {
       role: 'assistant',
       content: `Could not answer: ${error.message}`,
-      error: true
+      error: true,
+      question: value
     };
   }
   
+  chatPending = false;
   renderChat();
   $('#askButton').disabled = false;
+  $('#askButton').setAttribute('aria-label', 'Ask question');
 }
 
 window.clearChat = function() {
+  chatRequestId += 1;
+  chatPending = false;
+  copiedAnswerIndex = -1;
+  $('#askButton').disabled = false;
+  $('#askButton').setAttribute('aria-label', 'Ask question');
   chatHistory = [];
   renderChat();
 }
+
+async function copyAnswer(index) {
+  const msg = chatHistory[index];
+  if (!msg || msg.role !== 'assistant' || msg.loading || msg.error) return;
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(msg.content);
+    } else {
+      const temporaryInput = document.createElement('textarea');
+      temporaryInput.value = msg.content;
+      temporaryInput.setAttribute('readonly', '');
+      temporaryInput.style.position = 'fixed';
+      temporaryInput.style.opacity = '0';
+      document.body.appendChild(temporaryInput);
+      temporaryInput.select();
+      const copied = document.execCommand('copy');
+      temporaryInput.remove();
+      if (!copied) throw new Error('Clipboard access is unavailable');
+    }
+    msg.copyError = false;
+    copiedAnswerIndex = index;
+    renderChat();
+    setTimeout(() => {
+      if (copiedAnswerIndex === index) {
+        copiedAnswerIndex = -1;
+        renderChat();
+      }
+    }, 1400);
+  } catch (error) {
+    console.error('Could not copy answer', error);
+    msg.copyError = true;
+    renderChat();
+  }
+}
+
+$('#chatAnswer').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-chat-action]');
+  if (!button) return;
+  const { chatAction, question, index, rating } = button.dataset;
+  if (chatAction === 'ask') ask(question);
+  if (chatAction === 'feedback') sendFeedback(Number(index), Number(rating));
+  if (chatAction === 'copy') copyAnswer(Number(index));
+  if (chatAction === 'retry') ask(chatHistory[Number(index)]?.question);
+  if (chatAction === 'view') showView(button.dataset.view);
+});
 
 // Intelligence
 function renderAccuracy(accuracy) {
@@ -694,6 +907,19 @@ $('#addNotificationForm').addEventListener('submit', async (e) => {
 });
 
 
+document.addEventListener('DOMContentLoaded', () => {
+  const savedTheme = localStorage.getItem('smartstock_theme') || 'light';
+  applyTheme(savedTheme);
+  renderChat();
+  const toggle = $('#themeToggle');
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      const nextTheme = document.body.classList.contains('dark-theme') ? 'light' : 'dark';
+      applyTheme(nextTheme);
+    });
+  }
+});
+
 // Router & Events
 function showView(view, shouldUpdateHash = true) {
   const target = document.getElementById(view);
@@ -720,7 +946,12 @@ $('#salesFile').addEventListener('change', (event) => upload(event.target, '/api
 $('#documentFile').addEventListener('change', (event) => upload(event.target, '/api/documents', $('#documentMessage')));
 
 $('#askButton').addEventListener('click', () => ask());
-$('#question').addEventListener('keydown', (event) => { if (event.key === 'Enter') ask(); });
+$('#question').addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !event.isComposing) {
+    event.preventDefault();
+    ask();
+  }
+});
 document.querySelectorAll('.suggestions button').forEach((button) => button.addEventListener('click', () => ask(button.dataset.question)));
 
 $('#downloadPdfBtn').addEventListener('click', downloadPDF);

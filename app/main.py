@@ -22,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.demo import DEMO_DOCUMENTS, demo_sales_rows
-from app.services import analysis_for_sales, anomalies, chunk_text, fallback_answer, normalise_sales_rows, rank_chunks
+from app.services import analysis_for_sales, anomalies, chunk_text, fallback_answer, normalise_sales_rows, parse_sales_csv_text, rank_chunks, sales_csv_column_mapping
 from app.advanced import executive_report_pdf, forecast_accuracy, inventory_recommendations, operational_alerts
 
 # ---------------------------------------------------------------------------
@@ -644,7 +644,7 @@ async def upload_sales(
         raise HTTPException(413, "CSV exceeds the 5 MB demo limit.")
     try:
         text = raw.decode("utf-8-sig")
-        rows = normalise_sales_rows(csv.DictReader(io.StringIO(text)))
+        rows = parse_sales_csv_text(text)
     except (UnicodeDecodeError, ValueError) as error:
         raise HTTPException(400, str(error))
     with db_connection() as db:
@@ -657,6 +657,28 @@ async def upload_sales(
     logger.info("Sales upload (%s mode) for org '%s': %d rows", mode, org_id, len(rows))
     background_tasks.add_task(_dispatch_notifications, org_id)
     return {"message": "Sales data processed", "rows": len(rows), "products": len(set(row["product"] for row in rows)), "mode": mode}
+
+
+@app.post("/api/sales/preview")
+async def preview_sales(file: UploadFile = File(...)):
+    """Validate and normalize a CSV before it is written to the workspace."""
+    if not (file.filename or "").lower().endswith(".csv"):
+        raise HTTPException(400, "Choose a .csv file to preview.")
+    raw = await file.read()
+    if len(raw) > 5_000_000:
+        raise HTTPException(413, "CSV exceeds the 5 MB demo limit.")
+    try:
+        text = raw.decode("utf-8-sig")
+        rows = parse_sales_csv_text(text)
+        mapping = sales_csv_column_mapping(text)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise HTTPException(400, str(error))
+    labels = {"date": "Date", "product": "Product", "quantity": "Quantity/Sales", "inventory": "Inventory"}
+    return {
+        "rows": len(rows),
+        "mapping": [{"field": labels[field], "header": header} for field, header in mapping.items()],
+        "preview": rows[:5],
+    }
 
 
 @app.post("/api/documents")
