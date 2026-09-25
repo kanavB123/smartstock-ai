@@ -51,7 +51,9 @@ def forecast_accuracy(rows):
     }
 
 
-def inventory_recommendations(products, lead_time_days=14, safety_days=7):
+def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomalies_list=None):
+    if anomalies_list is None:
+        anomalies_list = []
     recommendations = []
     for product in products:
         inventory = product["latest_inventory"]
@@ -62,18 +64,36 @@ def inventory_recommendations(products, lead_time_days=14, safety_days=7):
         target_stock = math.ceil(daily * lead_time_days + safety_stock)
         quantity = max(0, math.ceil(target_stock - inventory))
         stockout_days = round(inventory / daily, 1)
+        
+        reasons = []
         if stockout_days < lead_time_days:
             priority = "Critical"
+            reasons.append(f"Lead time risk: Projected stockout in {stockout_days} days is shorter than the {lead_time_days}-day supplier lead time.")
         elif quantity:
             priority = "High"
         else:
             priority = "On track"
+            
+        if inventory < safety_stock:
+            reasons.append(f"Safety stock breach: Current inventory ({inventory}) is below the {safety_days}-day safety buffer ({safety_stock} units).")
+        elif quantity > 0 and priority != "Critical":
+            reasons.append(f"Below target: Inventory ({inventory}) has fallen below the target stock level ({target_stock} units).")
+            
+        prod_anomalies = [a for a in anomalies_list if a["product"] == product["product"]]
+        if prod_anomalies:
+            worst = max(prod_anomalies, key=lambda x: x["z_score"])
+            reasons.append(f"Demand spike contribution: Unusual demand ({worst['sales']} units on {worst['date']}, {worst['z_score']}σ above normal) is accelerating depletion.")
+            
+        if not reasons and priority == "On track":
+            reasons.append("Inventory levels are sufficient to cover forecasted demand and safety stock.")
+
         recommendations.append({
             "product": product["product"], "priority": priority, "inventory": inventory,
             "daily_demand": daily, "lead_time_days": lead_time_days, "safety_stock": safety_stock,
             "target_stock": target_stock, "recommended_order": quantity,
             "estimated_stockout_days": stockout_days,
             "action": "Raise purchase order today" if priority == "Critical" else ("Plan replenishment" if quantity else "Monitor"),
+            "reasons": reasons,
         })
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
     return sorted(recommendations, key=lambda item: (priority_order[item["priority"]], -item["recommended_order"]))

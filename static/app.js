@@ -486,6 +486,10 @@ function renderRecommendations(recommendations) {
     let priorityClass = 'on-track';
     if (r.priority === 'Critical') priorityClass = 'critical';
     if (r.priority === 'High') priorityClass = 'high';
+    const reasonsHtml = (r.reasons && r.reasons.length) 
+        ? `<ul class="reason-list">${r.reasons.map(reason => `<li>${escapeHtml(reason)}</li>`).join('')}</ul>`
+        : '<span class="muted-cell">No additional details.</span>';
+    
     return `
       <tr>
         <td><strong>${escapeHtml(r.product)}</strong></td>
@@ -493,8 +497,16 @@ function renderRecommendations(recommendations) {
         <td>${format(r.inventory)}</td>
         <td>${format(r.safety_stock)}</td>
         <td>${format(r.target_stock)}</td>
-        <td><strong>${format(r.order_qty)}</strong></td>
-        <td><button class="btn-secondary" style="padding:4px 8px;font-size:9px">Review</button></td>
+        <td><strong>${format(r.recommended_order)}</strong></td>
+        <td><button class="btn-secondary" onclick="this.closest('tr').nextElementSibling.classList.toggle('row-expanded')" style="padding:4px 8px;font-size:9px">Signals <span>↓</span></button></td>
+      </tr>
+      <tr class="reason-row">
+        <td colspan="7">
+          <div class="reason-content">
+            <p class="eyebrow">REORDER SIGNALS & REASONING</p>
+            ${reasonsHtml}
+          </div>
+        </td>
       </tr>
     `;
   }).join('');

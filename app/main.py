@@ -257,14 +257,16 @@ def live_analysis_chunks(org_id):
         })
         
     # 2. Recommendations & Reorder queue
+    anomaly_rows = anomalies(rows)
     recommendation_rows = []
     for product in products:
         pc = config.get(product["product"], {})
-        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7))
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows)
         recommendation_rows.extend(recs)
         
     for rec in recommendation_rows:
         if rec["priority"] in ("Critical", "High"):
+            reasons_str = "; ".join(rec.get("reasons", []))
             chunks.append({
                 "id": "reorder-{}".format(rec["product"]),
                 "name": "Live reorder queue — {}".format(rec["product"]),
@@ -273,14 +275,14 @@ def live_analysis_chunks(org_id):
                     "Reorder Recommendation for {product}: Status is {priority}. "
                     "Current inventory: {inventory} units. Target stock: {target} units. "
                     "Recommended order quantity: {order} units. "
-                    "Projected stockout in {stockout} days. Recommended action: {action}."
+                    "Projected stockout in {stockout} days. Recommended action: {action}. "
+                    "Reasons: {reasons}"
                 ).format(product=rec["product"], priority=rec["priority"], inventory=rec["inventory"], 
                          target=rec["target_stock"], order=rec["recommended_order"], 
-                         stockout=rec["estimated_stockout_days"], action=rec["action"]),
+                         stockout=rec["estimated_stockout_days"], action=rec["action"], reasons=reasons_str),
             })
 
     # 3. Anomalies
-    anomaly_rows = anomalies(rows)
     for index, anomaly in enumerate(anomaly_rows[:5]):
         chunks.append({
             "id": "anomaly-{}".format(index),
@@ -605,16 +607,16 @@ def intelligence(org_id: str = Depends(get_org_id)):
     # Use per-product config if available; otherwise use global defaults.
     config = inventory_config_for(org_id)
     recommendation_rows = []
+    anomaly_rows = anomalies(rows)
     for product in products:
         pc = config.get(product["product"], {})
         lt = pc.get("lead_time_days", 14)
         sd = pc.get("safety_days", 7)
-        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd)
+        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, anomalies_list=anomaly_rows)
         recommendation_rows.extend(recs)
     # Re-sort by priority.
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
     recommendation_rows.sort(key=lambda r: (priority_order.get(r["priority"], 9), -r["recommended_order"]))
-    anomaly_rows = anomalies(rows)
     return {
         "ready": True,
         "accuracy": forecast_accuracy(rows),
@@ -659,8 +661,19 @@ def executive_report(org_id: str = Depends(get_org_id)):
     }
     with db_connection() as db:
         summary["documents"] = db.execute("SELECT COUNT(*) AS count FROM documents WHERE organization_id = ?", (org_id,)).fetchone()["count"]
-    recommendations = inventory_recommendations(products)
-    report_bytes = executive_report_pdf(summary, products, recommendations, operational_alerts(products, recommendations, anomalies(rows)))
+        
+    config = inventory_config_for(org_id)
+    anomaly_rows = anomalies(rows)
+    recommendation_rows = []
+    for product in products:
+        pc = config.get(product["product"], {})
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows)
+        recommendation_rows.extend(recs)
+        
+    priority_order = {"Critical": 0, "High": 1, "On track": 2}
+    recommendation_rows.sort(key=lambda r: (priority_order.get(r["priority"], 9), -r["recommended_order"]))
+
+    report_bytes = executive_report_pdf(summary, products, recommendation_rows, operational_alerts(products, recommendation_rows, anomaly_rows))
     headers = {"Content-Disposition": "attachment; filename=smartstock-executive-briefing.pdf"}
     return StreamingResponse(io.BytesIO(report_bytes), media_type="application/pdf", headers=headers)
 
