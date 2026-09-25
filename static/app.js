@@ -206,6 +206,13 @@ function emptyOverview() {
   $('#anomalyList').className = 'empty-state'; $('#anomalyList').textContent = 'No data to analyse yet.';
   $('#dataReady').textContent = 'No data loaded';
   $('#status').classList.remove('live'); $('#status').lastChild.textContent = ' Workspace empty';
+  const banner = $('#demoBanner');
+  if (banner) banner.style.display = 'none';
+  const demoBtn = $('#dashboardDemo');
+  if (demoBtn) {
+    demoBtn.innerHTML = 'Load demo workspace <span>→</span>';
+    demoBtn.onclick = loadDemo;
+  }
   if (forecastChartInstance) forecastChartInstance.destroy();
   if (trendChartInstance) trendChartInstance.destroy();
 }
@@ -213,13 +220,33 @@ function emptyOverview() {
 function renderOverview(data) {
   if (!data.ready) { emptyOverview(); return; }
   const { summary, products, anomalies } = data;
+  const isDemo = data.is_demo && !authToken;
   $('#totalSales').textContent = format(summary.total_sales);
   $('#totalProducts').textContent = summary.products;
   $('#reorderAlerts').textContent = summary.reorder_alerts;
   $('#documentCount').textContent = summary.documents;
   $('#status').classList.add('live'); 
-  $('#status').lastChild.textContent = authToken ? ' Workspace ready' : ' Demo workspace ready';
+  $('#status').lastChild.textContent = authToken ? ' Workspace ready' : (isDemo ? ' Demo workspace' : ' Workspace ready');
   $('#dataReady').textContent = `${summary.products} products · ${summary.documents} sources`;
+
+  // Toggle the dashboard header button between "Load demo" and "Reset to my data"
+  const demoBtn = $('#dashboardDemo');
+  if (demoBtn) {
+    if (isDemo) {
+      demoBtn.textContent = '';
+      demoBtn.innerHTML = 'Reset to my data <span>↗</span>';
+      demoBtn.onclick = clearDemo;
+    } else {
+      demoBtn.innerHTML = 'Load demo workspace <span>→</span>';
+      demoBtn.onclick = loadDemo;
+    }
+  }
+
+  // Show demo banner for first-time visitors
+  const banner = $('#demoBanner');
+  if (banner) {
+    banner.style.display = isDemo ? 'flex' : 'none';
+  }
   
   renderCharts(products, summary);
   
@@ -258,6 +285,14 @@ async function loadDemo() {
   } catch (error) { alert(error.message); }
   buttons.forEach((button) => { if(button) button.disabled = false; });
   isDemoLoading = false;
+}
+
+async function clearDemo() {
+  try {
+    await request('/api/demo/clear', { method: 'POST' });
+    await refresh();
+    showView('data');
+  } catch (error) { alert(error.message); }
 }
 
 async function upload(input, url, messageNode) {

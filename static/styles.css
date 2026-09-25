@@ -79,3 +79,11 @@
 /* === Intelligence responsive === */
 @media(max-width:920px){.intelligence-grid{grid-template-columns:1fr}.recommendations-table,.alerts-panel{grid-column:auto}}
 @media(max-width:680px){.intelligence-grid{grid-template-columns:1fr}.recommendations-table,.alerts-panel,.trend-panel{grid-column:auto}.auth-card{padding:28px 22px}}
+
+/* === Demo Banner === */
+.demo-banner{display:flex;align-items:center;gap:14px;background:linear-gradient(135deg,#e2f5e8 0%,#dff4e5 100%);border:1px solid #c5eed4;border-radius:10px;padding:14px 20px;margin-bottom:18px}
+.demo-banner-icon{width:32px;height:32px;display:grid;place-items:center;background:var(--pine);color:var(--green);border-radius:8px;font-size:14px;flex-shrink:0}
+.demo-banner div{flex:1}
+.demo-banner strong{font-size:12px;color:var(--pine);display:block}
+.demo-banner span{font-size:10px;color:var(--muted)}
+.demo-banner .btn-secondary{flex-shrink:0}

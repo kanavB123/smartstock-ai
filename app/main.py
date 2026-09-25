@@ -140,6 +140,24 @@ def initialise_database():
     logger.info("Database ready (schema v%d) at %s", SCHEMA_VERSION, DATABASE)
 
 
+def _seed_demo_if_empty():
+    """Pre-populate the demo workspace so first-time visitors see a full dashboard."""
+    org_id = "demo"
+    with db_connection() as db:
+        count = db.execute("SELECT COUNT(*) AS count FROM sales WHERE organization_id = ?", (org_id,)).fetchone()["count"]
+    if count > 0:
+        return
+    rows = demo_sales_rows()
+    with db_connection() as db:
+        db.executemany(
+            "INSERT INTO sales (organization_id, date, product, quantity, inventory) VALUES (?, ?, ?, ?, ?)",
+            [(org_id, row["date"], row["product"], row["quantity"], row["inventory"]) for row in rows],
+        )
+    for name, content in DEMO_DOCUMENTS:
+        save_document(org_id, name, content)
+    logger.info("Auto-seeded demo workspace (%d sales rows, %d documents)", len(rows), len(DEMO_DOCUMENTS))
+
+
 # ---------------------------------------------------------------------------
 # Data access
 # ---------------------------------------------------------------------------
@@ -356,6 +374,7 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 @app.on_event("startup")
 def startup():
     initialise_database()
+    _seed_demo_if_empty()
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +450,19 @@ def reset_demo():
     return {"message": "Demo workspace is ready", "sales_rows": len(rows), "documents": len(DEMO_DOCUMENTS)}
 
 
+@app.post("/api/demo/clear")
+def clear_demo():
+    """Remove all demo data so the user can upload their own."""
+    org_id = "demo"
+    with db_connection() as db:
+        db.execute("DELETE FROM sales WHERE organization_id = ?", (org_id,))
+        db.execute("DELETE FROM chunks WHERE organization_id = ?", (org_id,))
+        db.execute("DELETE FROM documents WHERE organization_id = ?", (org_id,))
+        db.execute("DELETE FROM inventory_config WHERE organization_id = ?", (org_id,))
+    logger.info("Demo workspace cleared")
+    return {"message": "Demo data cleared. Upload your own data to get started."}
+
+
 # ---------------------------------------------------------------------------
 # Business endpoints (org derived from auth token; defaults to 'demo')
 # ---------------------------------------------------------------------------
@@ -497,14 +529,16 @@ async def upload_document(
 @app.get("/api/overview")
 def overview(org_id: str = Depends(get_org_id)):
     rows = sales_for(org_id)
+    is_demo = org_id == "demo"
     if not rows:
-        return {"ready": False, "message": "Upload sales data or load the demo workspace."}
+        return {"ready": False, "is_demo": is_demo, "message": "Upload sales data or load the demo workspace."}
     products = analysis_for_sales(rows)
     total_sales = round(sum(row["quantity"] for row in rows), 1)
     with db_connection() as db:
         document_count = db.execute("SELECT COUNT(*) AS count FROM documents WHERE organization_id = ?", (org_id,)).fetchone()["count"]
     return {
         "ready": True,
+        "is_demo": is_demo,
         "summary": {
             "total_sales": total_sales,
             "products": len(products),

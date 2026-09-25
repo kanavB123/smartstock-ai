@@ -63,6 +63,7 @@
 
         <section id="dashboard" class="view active-view" aria-labelledby="overview-title">
           <div class="view-intro"><div><p class="eyebrow">OVERVIEW</p><h1 id="overview-title">Good morning, Kanav.</h1><p>Here is the current state of your inventory operations.</p></div><button class="button primary" id="dashboardDemo">Load demo workspace <span>→</span></button></div>
+          <div id="demoBanner" class="demo-banner" style="display:none"><span class="demo-banner-icon">✦</span><div><strong>You're viewing demo data</strong><span>This is a sample workspace with 4 products and 60 days of sales history.</span></div><button class="btn-secondary" onclick="clearDemo()">Reset to my data <span>↗</span></button></div>
           <section class="metrics" aria-label="Key performance metrics">
             <article><span>Total units sold</span><strong id="totalSales">—</strong><small>Across uploaded records</small></article>
             <article><span>Active products</span><strong id="totalProducts">—</strong><small>With demand forecasts</small></article>
