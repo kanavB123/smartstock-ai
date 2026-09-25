@@ -159,9 +159,28 @@ function renderCharts(products, summary) {
     }
   });
 
-  const days = Array.from({length: 30}, (_, i) => `Day ${i+1}`);
-  const histData = Array.from({length: 16}, () => Math.floor(Math.random() * 50) + 10);
-  const projData = Array(15).fill(null).concat([histData[15]], Array.from({length: 14}, () => Math.floor(Math.random() * 50) + 10));
+  let days = [];
+  let histData = [];
+  let projData = [];
+
+  if (products && products.length > 0) {
+    const p0 = products[0];
+    const numHist = p0.history.length;
+    const numFcast = p0.forecast.length;
+    
+    days = p0.history.map(h => h.date).concat(Array.from({length: numFcast}, (_, i) => `+${i+1}d`));
+    histData = new Array(numHist).fill(0);
+    projData = new Array(numHist + numFcast).fill(null);
+    
+    products.forEach(p => {
+      p.history.forEach((h, i) => { histData[i] += h.sales; });
+      p.forecast.forEach((f, i) => {
+        projData[numHist + i] = (projData[numHist + i] || 0) + f;
+      });
+    });
+    // Connect the projection line
+    projData[numHist - 1] = histData[numHist - 1];
+  }
 
   trendChartInstance = new Chart(canvas2, {
     type: 'line',

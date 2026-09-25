@@ -169,7 +169,7 @@ def select_best_forecast(points, horizon=14):
     return best_model, future, best_mae
 
 
-def analysis_for_sales(rows, horizon=14):
+def analysis_for_sales(rows, horizon=14, demand_multiplier=1.0):
     grouped = defaultdict(list)
     inventory = {}
     for row in rows:
@@ -181,7 +181,7 @@ def analysis_for_sales(rows, horizon=14):
         ordered = sorted(records, key=lambda item: item["date"])
         by_day = defaultdict(float)
         for item in ordered:
-            by_day[item["date"]] += item["quantity"]
+            by_day[item["date"]] += item["quantity"] * demand_multiplier
         start = datetime.fromisoformat(ordered[0]["date"]).date()
         end = datetime.fromisoformat(ordered[-1]["date"]).date()
         series = [by_day[(start + timedelta(days=i)).isoformat()] for i in range((end - start).days + 1)]

@@ -58,7 +58,7 @@ def forecast_accuracy(rows):
     }
 
 
-def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomalies_list=None, suppliers=None):
+def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomalies_list=None, suppliers=None, lead_time_mult=1.0, safety_mult=1.0):
     if anomalies_list is None:
         anomalies_list = []
     if suppliers is None:
@@ -75,21 +75,25 @@ def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomal
         prod_suppliers = suppliers.get(product["product"], [])
         primary_supplier = next((s for s in prod_suppliers if s["is_primary"]), prod_suppliers[0] if prod_suppliers else None)
         
-        lt_days = primary_supplier["lead_time_days"] if primary_supplier else lead_time_days
+        base_lt = primary_supplier["lead_time_days"] if primary_supplier else lead_time_days
+        lt_days = base_lt * lead_time_mult
+        
         lt_var_days = primary_supplier["lead_time_variability_days"] if primary_supplier else 0
         moq = primary_supplier["moq"] if primary_supplier else 1
         
         # Safety stock includes base safety days + variability risk buffer
-        safety_stock = math.ceil(daily * (safety_days + lt_var_days))
+        effective_safety_days = safety_days * safety_mult
+        safety_stock = math.ceil(daily * (effective_safety_days + lt_var_days))
         target_stock = math.ceil(daily * lt_days + safety_stock)
         raw_quantity = max(0, target_stock - inventory)
         quantity = math.ceil(raw_quantity / moq) * moq if raw_quantity > 0 else 0
         stockout_days = round(inventory / daily, 1)
+        lt_days_fmt = round(lt_days, 1)
         
         reasons = []
         if stockout_days < lt_days:
             priority = "Critical"
-            reasons.append(f"Lead time risk: Projected stockout in {stockout_days} days is shorter than the {lt_days}-day supplier lead time.")
+            reasons.append(f"Lead time risk: Projected stockout in {stockout_days} days is shorter than the {lt_days_fmt}-day supplier lead time.")
         elif quantity:
             priority = "High"
         else:

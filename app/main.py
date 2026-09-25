@@ -690,12 +690,24 @@ async def upload_document(
 
 
 @app.get("/api/overview")
-def overview(org_id: str = Depends(get_org_id)):
+def overview(org_id: str = Depends(get_org_id), demand_mult: float = 1.0, lead_time_mult: float = 1.0, safety_mult: float = 1.0):
     rows = sales_for(org_id)
     is_demo = org_id == "demo"
     if not rows:
         return {"ready": False, "is_demo": is_demo, "message": "Upload sales data or load the demo workspace."}
-    products = analysis_for_sales(rows)
+    products = analysis_for_sales(rows, demand_multiplier=demand_mult)
+    
+    # Recalculate reorder flags with multipliers so overview stats match intelligence
+    config = inventory_config_for(org_id)
+    suppliers = suppliers_for(org_id)
+    for product in products:
+        pc = config.get(product["product"], {})
+        lt = pc.get("lead_time_days", 14)
+        sd = pc.get("safety_days", 7)
+        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, suppliers=suppliers, lead_time_mult=lead_time_mult, safety_mult=safety_mult)
+        if recs:
+            product["reorder"] = recs[0]["priority"] in ("Critical", "High")
+
     total_sales = round(sum(row["quantity"] for row in rows), 1)
     with db_connection() as db:
         document_count = db.execute("SELECT COUNT(*) AS count FROM documents WHERE organization_id = ?", (org_id,)).fetchone()["count"]
@@ -714,11 +726,11 @@ def overview(org_id: str = Depends(get_org_id)):
 
 
 @app.get("/api/intelligence")
-def intelligence(org_id: str = Depends(get_org_id)):
+def intelligence(org_id: str = Depends(get_org_id), demand_mult: float = 1.0, lead_time_mult: float = 1.0, safety_mult: float = 1.0):
     rows = sales_for(org_id)
     if not rows:
         return {"ready": False, "message": "Upload sales data to generate intelligence."}
-    products = analysis_for_sales(rows)
+    products = analysis_for_sales(rows, demand_multiplier=demand_mult)
     config = inventory_config_for(org_id)
     suppliers = suppliers_for(org_id)
     recommendation_rows = []
@@ -727,7 +739,7 @@ def intelligence(org_id: str = Depends(get_org_id)):
         pc = config.get(product["product"], {})
         lt = pc.get("lead_time_days", 14)
         sd = pc.get("safety_days", 7)
-        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, anomalies_list=anomaly_rows, suppliers=suppliers)
+        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, anomalies_list=anomaly_rows, suppliers=suppliers, lead_time_mult=lead_time_mult, safety_mult=safety_mult)
         recommendation_rows.extend(recs)
     # Re-sort by priority.
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
@@ -765,26 +777,29 @@ def run_evaluations(org_id: str = Depends(get_org_id)):
 
 
 @app.get("/api/reports/executive")
-def executive_report(org_id: str = Depends(get_org_id)):
+def executive_report(org_id: str = Depends(get_org_id), demand_mult: float = 1.0, lead_time_mult: float = 1.0, safety_mult: float = 1.0):
     rows = sales_for(org_id)
     if not rows:
         raise HTTPException(400, "Upload sales data before creating a report.")
-    products = analysis_for_sales(rows)
-    summary = {
-        "total_sales": round(sum(row["quantity"] for row in rows), 1), "products": len(products),
-        "reorder_alerts": sum(1 for product in products if product["reorder"]),
-    }
-    with db_connection() as db:
-        summary["documents"] = db.execute("SELECT COUNT(*) AS count FROM documents WHERE organization_id = ?", (org_id,)).fetchone()["count"]
-        
+    products = analysis_for_sales(rows, demand_multiplier=demand_mult)
+    
     config = inventory_config_for(org_id)
     anomaly_rows = anomalies(rows)
     suppliers = suppliers_for(org_id)
     recommendation_rows = []
     for product in products:
         pc = config.get(product["product"], {})
-        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows, suppliers=suppliers)
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows, suppliers=suppliers, lead_time_mult=lead_time_mult, safety_mult=safety_mult)
+        if recs:
+            product["reorder"] = recs[0]["priority"] in ("Critical", "High")
         recommendation_rows.extend(recs)
+        
+    summary = {
+        "total_sales": round(sum(row["quantity"] for row in rows), 1), "products": len(products),
+        "reorder_alerts": sum(1 for product in products if product["reorder"]),
+    }
+    with db_connection() as db:
+        summary["documents"] = db.execute("SELECT COUNT(*) AS count FROM documents WHERE organization_id = ?", (org_id,)).fetchone()["count"]
         
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
     recommendation_rows.sort(key=lambda r: (priority_order.get(r["priority"], 9), -r["recommended_order"]))
