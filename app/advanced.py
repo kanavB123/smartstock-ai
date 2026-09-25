@@ -4,8 +4,7 @@ from datetime import date
 from io import BytesIO
 import math
 
-from app.services import linear_forecast
-
+from app.services import linear_forecast, moving_average_forecast, holt_winters_forecast
 
 def _series_by_product(rows):
     grouped = defaultdict(list)
@@ -30,23 +29,31 @@ def _error(actual, predicted):
 
 
 def forecast_accuracy(rows):
-    """Small transparent back-test comparing trend and moving-average forecasts."""
-    all_actual, all_trend, all_average = [], [], []
+    """Transparent back-test comparing all models on a holdout set."""
+    all_actual, all_ma, all_linear, all_hw = [], [], [], []
     for values in _series_by_product(rows).values():
         holdout = min(14, max(2, len(values) // 4))
         if len(values) < holdout + 4:
             continue
         train, actual = values[:-holdout], values[-holdout:]
-        trend = linear_forecast(train, holdout)
-        baseline = sum(train[-min(7, len(train)):]) / min(7, len(train))
+        
         all_actual.extend(actual)
-        all_trend.extend(trend)
-        all_average.extend([baseline] * holdout)
+        all_ma.extend(moving_average_forecast(train, holdout))
+        all_linear.extend(linear_forecast(train, holdout) if len(train) >= 2 else moving_average_forecast(train, holdout))
+        all_hw.extend(holt_winters_forecast(train, holdout) if len(train) >= 14 else moving_average_forecast(train, holdout))
+        
+    models = [
+        {"name": "Holt-Winters (Exponential)", **_error(all_actual, all_hw)},
+        {"name": "Linear Trend", **_error(all_actual, all_linear)},
+        {"name": "Moving Average", **_error(all_actual, all_ma)},
+    ]
+    models.sort(key=lambda m: m["mae"])
+    models[0]["selected"] = True
+    for m in models[1:]:
+        m["selected"] = False
+        
     return {
-        "models": [
-            {"name": "Trend regression", **_error(all_actual, all_trend), "selected": True},
-            {"name": "7-day moving average", **_error(all_actual, all_average), "selected": False},
-        ],
+        "models": models,
         "note": "Back-test holds out recent observations and compares predicted demand with actual sales.",
     }
 

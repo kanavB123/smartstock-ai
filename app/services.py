@@ -126,6 +126,49 @@ def linear_forecast(points, horizon=14):
     return [max(0, round(intercept + slope * (n + step), 1)) for step in range(horizon)]
 
 
+def moving_average_forecast(points, horizon=14, window=7):
+    """Return a naive moving average forecast."""
+    if not points:
+        return [0.0] * horizon
+    avg = sum(points[-window:]) / min(len(points), window)
+    return [round(max(0, avg), 1)] * horizon
+
+
+def select_best_forecast(points, horizon=14):
+    """Select between MA, Linear, and Holt-Winters by evaluating holdout MAE."""
+    if len(points) < 8:
+        return "Moving Average", moving_average_forecast(points, horizon), 0.0
+        
+    holdout_len = min(7, len(points) // 4)
+    train = points[:-holdout_len]
+    actual = points[-holdout_len:]
+    
+    candidates = {}
+    candidates["Moving Average"] = moving_average_forecast(train, holdout_len)
+    if len(train) >= 2:
+        candidates["Linear Trend"] = linear_forecast(train, holdout_len)
+    if len(train) >= 14:
+        candidates["Holt-Winters (Exponential)"] = holt_winters_forecast(train, holdout_len)
+        
+    best_model = "Moving Average"
+    best_mae = float('inf')
+    
+    for name, preds in candidates.items():
+        mae = sum(abs(a - p) for a, p in zip(actual, preds)) / holdout_len
+        if mae < best_mae:
+            best_mae = mae
+            best_model = name
+            
+    if best_model == "Holt-Winters (Exponential)":
+        future = holt_winters_forecast(points, horizon)
+    elif best_model == "Linear Trend":
+        future = linear_forecast(points, horizon)
+    else:
+        future = moving_average_forecast(points, horizon)
+        
+    return best_model, future, best_mae
+
+
 def analysis_for_sales(rows, horizon=14):
     grouped = defaultdict(list)
     inventory = {}
@@ -142,7 +185,9 @@ def analysis_for_sales(rows, horizon=14):
         start = datetime.fromisoformat(ordered[0]["date"]).date()
         end = datetime.fromisoformat(ordered[-1]["date"]).date()
         series = [by_day[(start + timedelta(days=i)).isoformat()] for i in range((end - start).days + 1)]
-        forecast = holt_winters_forecast(series, horizon)
+        
+        best_model, forecast, best_mae = select_best_forecast(series, horizon)
+        
         daily_average = round(sum(series) / len(series), 1)
         forecast_total = round(sum(forecast), 1)
         on_hand = inventory.get(product)
@@ -156,6 +201,8 @@ def analysis_for_sales(rows, horizon=14):
             "days_cover": days_cover,
             "forecast_14d": forecast_total,
             "reorder": reorder,
+            "forecast_model": best_model,
+            "model_mae": round(best_mae, 1),
             "forecast": forecast,
             "history": [{"date": date, "sales": round(value, 1)} for date, value in sorted(by_day.items())],
         })

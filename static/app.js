@@ -255,7 +255,7 @@ function renderOverview(data) {
   $('.alert-dot').classList.toggle('active', queue.length > 0);
   $('#reorderList').innerHTML = queue.length ? queue.map((p) => `<div class="reorder-item"><div><strong>${escapeHtml(p.product)}</strong><small>${format(p.latest_inventory)} units on hand · ${p.days_cover || 0} days cover</small></div><span class="signal">REORDER</span></div>`).join('') : '<div class="empty-state" style="height:150px">All products have enough stock for their near-term forecast.</div>';
   
-  $('#productTable').innerHTML = products.map((p) => `<tr><td><strong>${escapeHtml(p.product)}</strong></td><td>${format(p.daily_average)}</td><td>${format(p.forecast_14d)}</td><td>${p.latest_inventory === null ? '—' : format(p.latest_inventory)}</td><td><span class="pill ${p.reorder ? 'warning' : ''}">${p.reorder ? 'REORDER' : 'ON TRACK'}</span></td></tr>`).join('');
+  $('#productTable').innerHTML = products.map((p) => `<tr><td><strong>${escapeHtml(p.product)}</strong></td><td>${format(p.daily_average)}</td><td>${format(p.forecast_14d)}</td><td>${p.latest_inventory === null ? '—' : format(p.latest_inventory)}</td><td><span class="pill model-pill">${escapeHtml(p.forecast_model || 'Auto')}</span><small class="model-mae">MAE ${format(p.model_mae || 0)}</small></td><td><span class="pill ${p.reorder ? 'warning' : ''}">${p.reorder ? 'REORDER' : 'ON TRACK'}</span></td></tr>`).join('');
   
   $('#anomalyList').className = '';
   $('#anomalyList').innerHTML = anomalies.length ? anomalies.slice(0, 4).map((a) => `<div class="anomaly-item"><div><strong>${escapeHtml(a.product)}</strong><small>${a.date} · ${format(a.sales)} units sold</small></div><span class="signal">${a.z_score}σ</span></div>`).join('') : '<div class="empty-state" style="height:85px">No unusual demand patterns detected.</div>';
@@ -456,23 +456,26 @@ window.clearChat = function() {
 // Intelligence
 function renderAccuracy(accuracy) {
   const container = $('#accuracyContent');
-  if (!accuracy || !accuracy.length) {
+  const models = accuracy && accuracy.models;
+  if (!models || !models.length) {
     container.innerHTML = '<div class="empty-state" style="height:150px">No accuracy data available.</div>';
     return;
   }
   let html = '';
-  accuracy.forEach(model => {
+  models.forEach(model => {
     html += `
       <div class="model-row">
-        <div class="model-name">${escapeHtml(model.name)} ${model.selected ? '<span class="selected-badge">Active</span>' : ''}</div>
+        <div class="model-name">${escapeHtml(model.name)} ${model.selected ? '<span class="selected-badge">Best</span>' : ''}</div>
         <div class="model-metrics">
           <span>MAE: <strong>${format(model.mae)}</strong></span>
           <span>RMSE: <strong>${format(model.rmse)}</strong></span>
+          <span>Samples: <strong>${model.samples}</strong></span>
         </div>
       </div>
     `;
   });
-  html += '<div class="accuracy-note">Accuracy measured over a 30-day holdout set. The model with the lowest Mean Absolute Error (MAE) is automatically selected.</div>';
+  const note = accuracy.note || 'Accuracy measured via holdout backtesting. The model with the lowest MAE is auto-selected per product.';
+  html += `<div class="accuracy-note">${escapeHtml(note)}</div>`;
   container.innerHTML = html;
 }
 
