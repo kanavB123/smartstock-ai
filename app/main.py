@@ -10,12 +10,13 @@ import os
 import secrets
 import sqlite3
 import time
+import httpx
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -37,7 +38,7 @@ TOKEN_EXPIRY_SECONDS = int(os.getenv("SMARTSTOCK_TOKEN_EXPIRY", "86400"))  # 24 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 # Schema version — bump when adding migration steps.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -146,6 +147,19 @@ def _run_migrations(db):
         """)
         db.execute("CREATE INDEX IF NOT EXISTS suppliers_org_idx ON suppliers(organization_id)")
         current = 3
+    if current < 4:
+        db.execute("""
+        CREATE TABLE IF NOT EXISTS notification_configs (
+            id INTEGER PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            method TEXT NOT NULL,
+            target TEXT NOT NULL,
+            on_reorder INTEGER NOT NULL DEFAULT 1,
+            on_anomaly INTEGER NOT NULL DEFAULT 1
+        )
+        """)
+        current = 4
+
 
     db.execute("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)", (str(current),))
     db.connection.commit() if hasattr(db, "connection") else None
@@ -212,6 +226,13 @@ def suppliers_for(org_id):
     for row in rows:
         result[row["product"]].append(dict(row))
     return dict(result)
+
+
+def notifications_for(org_id):
+    """Return all notification configurations for the organization."""
+    with db_connection() as db:
+        rows = db.execute("SELECT id, method, target, on_reorder, on_anomaly FROM notification_configs WHERE organization_id = ?", (org_id,)).fetchall()
+    return [dict(row) for row in rows]
 
 # ---------------------------------------------------------------------------
 # Embedding & retrieval helpers
@@ -364,6 +385,14 @@ class SupplierRequest(BaseModel):
     lead_time_variability_days: int = Field(ge=0, le=100)
     moq: int = Field(ge=1, le=1000000)
     is_primary: bool = False
+
+
+class NotificationConfigRequest(BaseModel):
+    method: str = Field(pattern="^(email|webhook)$")
+    target: str = Field(min_length=3)
+    on_reorder: bool = True
+    on_anomaly: bool = True
+
 
 
 
@@ -556,8 +585,52 @@ def clear_demo():
 # Business endpoints (org derived from auth token; defaults to 'demo')
 # ---------------------------------------------------------------------------
 
+def _dispatch_notifications(org_id: str):
+    configs = notifications_for(org_id)
+    if not configs:
+        return
+        
+    rows = sales_for(org_id)
+    if not rows:
+        return
+        
+    products = analysis_for_sales(rows)
+    config = inventory_config_for(org_id)
+    suppliers = suppliers_for(org_id)
+    anomaly_rows = anomalies(rows)
+    
+    recommendation_rows = []
+    for product in products:
+        pc = config.get(product["product"], {})
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows, suppliers=suppliers)
+        recommendation_rows.extend(recs)
+        
+    critical_reorders = [r for r in recommendation_rows if r["priority"] in ("Critical", "High")]
+    
+    for c in configs:
+        payload = {}
+        if c["on_reorder"] and critical_reorders:
+            payload["reorders"] = critical_reorders
+        if c["on_anomaly"] and anomaly_rows:
+            payload["anomalies"] = anomaly_rows
+            
+        if not payload:
+            continue
+            
+        if c["method"] == "email":
+            logger.info("MOCK EMAIL SENT to %s: %d reorders, %d anomalies", c["target"], len(payload.get("reorders", [])), len(payload.get("anomalies", [])))
+        elif c["method"] == "webhook":
+            try:
+                # We do this synchronously in the background thread.
+                httpx.post(c["target"], json=payload, timeout=5.0)
+                logger.info("WEBHOOK SENT to %s", c["target"])
+            except Exception as e:
+                logger.error("WEBHOOK FAILED to %s: %s", c["target"], e)
+
+
 @app.post("/api/sales")
 async def upload_sales(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     mode: str = Form("append"),
     org_id: str = Depends(get_org_id),
@@ -582,6 +655,7 @@ async def upload_sales(
             [(org_id, row["date"], row["product"], row["quantity"], row["inventory"]) for row in rows],
         )
     logger.info("Sales upload (%s mode) for org '%s': %d rows", mode, org_id, len(rows))
+    background_tasks.add_task(_dispatch_notifications, org_id)
     return {"message": "Sales data processed", "rows": len(rows), "products": len(set(row["product"] for row in rows)), "mode": mode}
 
 
@@ -824,6 +898,30 @@ def delete_supplier(supplier_id: int, org_id: str = Depends(get_org_id)):
     with db_connection() as db:
         db.execute("DELETE FROM suppliers WHERE id = ? AND organization_id = ?", (supplier_id, org_id))
     return {"message": "Supplier deleted"}
+
+# ---------------------------------------------------------------------------
+# Notifications
+# ---------------------------------------------------------------------------
+
+@app.get("/api/notifications")
+def get_notifications(org_id: str = Depends(get_org_id)):
+    return {"configs": notifications_for(org_id)}
+
+@app.post("/api/notifications")
+def add_notification(request: NotificationConfigRequest, org_id: str = Depends(get_org_id)):
+    with db_connection() as db:
+        cursor = db.execute(
+            "INSERT INTO notification_configs (organization_id, method, target, on_reorder, on_anomaly) VALUES (?, ?, ?, ?, ?)",
+            (org_id, request.method, request.target.strip(), 1 if request.on_reorder else 0, 1 if request.on_anomaly else 0)
+        )
+        config_id = cursor.lastrowid
+    return {"message": "Notification configured", "id": config_id}
+
+@app.delete("/api/notifications/{config_id}")
+def delete_notification(config_id: int, org_id: str = Depends(get_org_id)):
+    with db_connection() as db:
+        db.execute("DELETE FROM notification_configs WHERE id = ? AND organization_id = ?", (config_id, org_id))
+    return {"message": "Notification deleted"}
 
 # ---------------------------------------------------------------------------
 # CSV export

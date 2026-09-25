@@ -618,6 +618,63 @@ $('#addSupplierForm').addEventListener('submit', async (e) => {
   }
 });
 
+async function loadNotifications() {
+  try {
+    const data = await request('/api/notifications');
+    const container = $('#notificationsContent');
+    if (!data.configs || data.configs.length === 0) {
+      container.innerHTML = '<div class="empty-state">No notifications configured.</div>';
+      return;
+    }
+    container.innerHTML = data.configs.map(c => `
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; padding-bottom:8px; border-bottom:1px dashed var(--line);">
+        <div>
+          <strong style="text-transform:uppercase; font-size:10px; color:var(--text-muted);">${c.method}</strong><br>
+          <span style="font-size:12px;">${escapeHtml(c.target)}</span><br>
+          <span style="font-size:10px; color:var(--text-muted);">
+            Triggers: ${c.on_reorder ? 'Reorders' : ''} ${c.on_reorder && c.on_anomaly ? '&' : ''} ${c.on_anomaly ? 'Anomalies' : ''}
+          </span>
+        </div>
+        <button class="btn-secondary" onclick="deleteNotification(${c.id})" style="padding:4px 8px;font-size:9px;color:var(--danger, #d32f2f)">Remove</button>
+      </div>
+    `).join('');
+  } catch (err) {
+    console.error('Failed to load notifications', err);
+  }
+}
+
+async function deleteNotification(id) {
+  if (!confirm("Remove this notification config?")) return;
+  try {
+    await request(`/api/notifications/${id}`, { method: 'DELETE' });
+    loadNotifications();
+  } catch (err) { alert(err.message); }
+}
+
+$('#addNotificationForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  try {
+    await request('/api/notifications', {
+      method: 'POST',
+      body: JSON.stringify({
+        method: $('#notifMethod').value,
+        target: $('#notifTarget').value,
+        on_reorder: $('#notifReorder').checked,
+        on_anomaly: $('#notifAnomaly').checked
+      })
+    });
+    e.target.reset();
+    loadNotifications();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+
 // Router & Events
 function showView(view, shouldUpdateHash = true) {
   const target = document.getElementById(view);
@@ -630,6 +687,7 @@ function showView(view, shouldUpdateHash = true) {
   if (view === 'intelligence') {
     loadIntelligence();
     loadSuppliers();
+    loadNotifications();
   }
 }
 

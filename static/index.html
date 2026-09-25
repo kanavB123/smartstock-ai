@@ -151,6 +151,34 @@
                 <div class="empty-state" style="height:150px">No operational alerts.</div>
               </div>
             </article>
+
+            <article class="panel alerts-panel">
+              <div class="panel-heading">
+                <div>
+                  <h3>Notification webhooks & emails</h3>
+                  <p>Get alerted when new events occur</p>
+                </div>
+              </div>
+              <div id="notificationsContent" style="padding: 15px; border-bottom: 1px solid var(--line); flex: 1; overflow-y: auto;">
+                <div class="empty-state">Loading...</div>
+              </div>
+              <form id="addNotificationForm" class="inline-form" style="padding:15px; display:flex; flex-direction:column; gap:10px;">
+                <div style="display:flex; gap:10px; align-items:center;">
+                  <select id="notifMethod" required class="input-base" style="width: 100px;">
+                    <option value="email">Email</option>
+                    <option value="webhook">Webhook</option>
+                  </select>
+                  <input type="text" id="notifTarget" placeholder="Target address/URL" required style="flex:1;" class="input-base">
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                  <div style="display:flex; gap:15px;">
+                    <label style="font-size:11px; cursor:pointer;"><input type="checkbox" id="notifReorder" checked> Reorders</label>
+                    <label style="font-size:11px; cursor:pointer;"><input type="checkbox" id="notifAnomaly" checked> Anomalies</label>
+                  </div>
+                  <button type="submit" class="btn-primary" style="padding:6px 12px; font-size:11px;">Save config</button>
+                </div>
+              </form>
+            </article>
             <article class="panel recommendations-table wide-table">
               <div class="panel-heading">
                 <div>
