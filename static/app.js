@@ -553,6 +553,71 @@ async function loadIntelligence() {
   }
 }
 
+async function loadSuppliers() {
+  try {
+    const data = await request('/api/suppliers');
+    const table = $('#suppliersTable');
+    if (!data.suppliers || Object.keys(data.suppliers).length === 0) {
+      table.innerHTML = '<tr><td colspan="7" class="muted-cell">No suppliers configured.</td></tr>';
+      return;
+    }
+    let html = '';
+    for (const [product, suppliers] of Object.entries(data.suppliers)) {
+      suppliers.forEach(s => {
+        html += `
+          <tr>
+            <td><strong>${escapeHtml(s.product)}</strong></td>
+            <td>${escapeHtml(s.supplier_name)}</td>
+            <td>${s.lead_time_days} days</td>
+            <td>±${s.lead_time_variability_days} days</td>
+            <td>${s.moq} units</td>
+            <td>${s.is_primary ? '<span class="selected-badge">Primary</span>' : ''}</td>
+            <td><button class="btn-secondary" onclick="deleteSupplier(${s.id})" style="padding:4px 8px;font-size:9px;color:var(--danger, #d32f2f)">Remove</button></td>
+          </tr>
+        `;
+      });
+    }
+    table.innerHTML = html;
+  } catch (err) {
+    console.error('Failed to load suppliers', err);
+  }
+}
+
+async function deleteSupplier(id) {
+  if (!confirm("Remove this supplier?")) return;
+  try {
+    await request(`/api/suppliers/${id}`, { method: 'DELETE' });
+    loadSuppliers();
+    loadIntelligence();
+  } catch (err) { alert(err.message); }
+}
+
+$('#addSupplierForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const btn = e.target.querySelector('button');
+  btn.disabled = true;
+  try {
+    await request('/api/suppliers', {
+      method: 'POST',
+      body: JSON.stringify({
+        product: $('#supProduct').value,
+        supplier_name: $('#supName').value,
+        lead_time_days: parseInt($('#supLead').value),
+        lead_time_variability_days: parseInt($('#supVar').value),
+        moq: parseInt($('#supMoq').value),
+        is_primary: $('#supPrimary').checked
+      })
+    });
+    e.target.reset();
+    loadSuppliers();
+    loadIntelligence();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // Router & Events
 function showView(view, shouldUpdateHash = true) {
   const target = document.getElementById(view);
@@ -564,6 +629,7 @@ function showView(view, shouldUpdateHash = true) {
   
   if (view === 'intelligence') {
     loadIntelligence();
+    loadSuppliers();
   }
 }
 
@@ -582,6 +648,7 @@ document.querySelectorAll('.suggestions button').forEach((button) => button.addE
 
 $('#downloadPdfBtn').addEventListener('click', downloadPDF);
 $('#exportCsvBtn').addEventListener('click', exportCSV);
+
 
 // Upload mode toggles
 document.querySelectorAll('.mode-toggle button').forEach(btn => {

@@ -10,6 +10,7 @@ import os
 import secrets
 import sqlite3
 import time
+from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional
@@ -36,7 +37,7 @@ TOKEN_EXPIRY_SECONDS = int(os.getenv("SMARTSTOCK_TOKEN_EXPIRY", "86400"))  # 24 
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
 
 # Schema version — bump when adding migration steps.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -130,6 +131,22 @@ def _run_migrations(db):
         """)
         current = 2
 
+    if current < 3:
+        db.execute("""
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY,
+            organization_id TEXT NOT NULL,
+            product TEXT NOT NULL,
+            supplier_name TEXT NOT NULL,
+            lead_time_days INTEGER NOT NULL DEFAULT 14,
+            lead_time_variability_days INTEGER NOT NULL DEFAULT 3,
+            moq INTEGER NOT NULL DEFAULT 1,
+            is_primary INTEGER NOT NULL DEFAULT 0
+        )
+        """)
+        db.execute("CREATE INDEX IF NOT EXISTS suppliers_org_idx ON suppliers(organization_id)")
+        current = 3
+
     db.execute("INSERT OR REPLACE INTO schema_meta (key, value) VALUES ('version', ?)", (str(current),))
     db.connection.commit() if hasattr(db, "connection") else None
 
@@ -182,6 +199,19 @@ def inventory_config_for(org_id):
         rows = db.execute("SELECT product, lead_time_days, safety_days FROM inventory_config WHERE organization_id = ?", (org_id,)).fetchall()
     return {row["product"]: {"lead_time_days": row["lead_time_days"], "safety_days": row["safety_days"]} for row in rows}
 
+
+def suppliers_for(org_id):
+    """Return all supplier rows for the org, grouped by product."""
+    with db_connection() as db:
+        rows = db.execute(
+            "SELECT id, product, supplier_name, lead_time_days, lead_time_variability_days, moq, is_primary "
+            "FROM suppliers WHERE organization_id = ? ORDER BY product, is_primary DESC, supplier_name",
+            (org_id,),
+        ).fetchall()
+    result = defaultdict(list)
+    for row in rows:
+        result[row["product"]].append(dict(row))
+    return dict(result)
 
 # ---------------------------------------------------------------------------
 # Embedding & retrieval helpers
@@ -259,9 +289,10 @@ def live_analysis_chunks(org_id):
     # 2. Recommendations & Reorder queue
     anomaly_rows = anomalies(rows)
     recommendation_rows = []
+    suppliers = suppliers_for(org_id)
     for product in products:
         pc = config.get(product["product"], {})
-        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows)
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows, suppliers=suppliers)
         recommendation_rows.extend(recs)
         
     for rec in recommendation_rows:
@@ -324,6 +355,16 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     question: str = Field(min_length=2, max_length=1000)
     history: list[ChatMessage] = []
+
+
+class SupplierRequest(BaseModel):
+    product: str = Field(min_length=1, max_length=100)
+    supplier_name: str = Field(min_length=1, max_length=100)
+    lead_time_days: int = Field(ge=1, le=365)
+    lead_time_variability_days: int = Field(ge=0, le=100)
+    moq: int = Field(ge=1, le=1000000)
+    is_primary: bool = False
+
 
 
 class AuthRequest(BaseModel):
@@ -604,15 +645,15 @@ def intelligence(org_id: str = Depends(get_org_id)):
     if not rows:
         return {"ready": False, "message": "Upload sales data to generate intelligence."}
     products = analysis_for_sales(rows)
-    # Use per-product config if available; otherwise use global defaults.
     config = inventory_config_for(org_id)
+    suppliers = suppliers_for(org_id)
     recommendation_rows = []
     anomaly_rows = anomalies(rows)
     for product in products:
         pc = config.get(product["product"], {})
         lt = pc.get("lead_time_days", 14)
         sd = pc.get("safety_days", 7)
-        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, anomalies_list=anomaly_rows)
+        recs = inventory_recommendations([product], lead_time_days=lt, safety_days=sd, anomalies_list=anomaly_rows, suppliers=suppliers)
         recommendation_rows.extend(recs)
     # Re-sort by priority.
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
@@ -664,10 +705,11 @@ def executive_report(org_id: str = Depends(get_org_id)):
         
     config = inventory_config_for(org_id)
     anomaly_rows = anomalies(rows)
+    suppliers = suppliers_for(org_id)
     recommendation_rows = []
     for product in products:
         pc = config.get(product["product"], {})
-        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows)
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7), anomalies_list=anomaly_rows, suppliers=suppliers)
         recommendation_rows.extend(recs)
         
     priority_order = {"Critical": 0, "High": 1, "On track": 2}
@@ -756,6 +798,32 @@ def set_inventory_config(request: InventoryConfigRequest, org_id: str = Depends(
     logger.info("Inventory config updated for '%s' in org '%s'", request.product.strip(), org_id)
     return {"message": "Configuration saved", "product": request.product.strip(), "lead_time_days": request.lead_time_days, "safety_days": request.safety_days}
 
+
+# ---------------------------------------------------------------------------
+# Suppliers
+# ---------------------------------------------------------------------------
+
+@app.get("/api/suppliers")
+def get_suppliers(org_id: str = Depends(get_org_id)):
+    return {"suppliers": suppliers_for(org_id)}
+
+@app.post("/api/suppliers")
+def add_supplier(request: SupplierRequest, org_id: str = Depends(get_org_id)):
+    with db_connection() as db:
+        if request.is_primary:
+            db.execute("UPDATE suppliers SET is_primary = 0 WHERE organization_id = ? AND product = ?", (org_id, request.product.strip()))
+        cursor = db.execute(
+            "INSERT INTO suppliers (organization_id, product, supplier_name, lead_time_days, lead_time_variability_days, moq, is_primary) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (org_id, request.product.strip(), request.supplier_name.strip(), request.lead_time_days, request.lead_time_variability_days, request.moq, 1 if request.is_primary else 0)
+        )
+        supplier_id = cursor.lastrowid
+    return {"message": "Supplier added", "id": supplier_id}
+
+@app.delete("/api/suppliers/{supplier_id}")
+def delete_supplier(supplier_id: int, org_id: str = Depends(get_org_id)):
+    with db_connection() as db:
+        db.execute("DELETE FROM suppliers WHERE id = ? AND organization_id = ?", (supplier_id, org_id))
+    return {"message": "Supplier deleted"}
 
 # ---------------------------------------------------------------------------
 # CSV export

@@ -58,33 +58,50 @@ def forecast_accuracy(rows):
     }
 
 
-def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomalies_list=None):
+def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomalies_list=None, suppliers=None):
     if anomalies_list is None:
         anomalies_list = []
+    if suppliers is None:
+        suppliers = {}
+        
     recommendations = []
     for product in products:
         inventory = product["latest_inventory"]
         if inventory is None or product["daily_average"] <= 0:
             continue
         daily = product["daily_average"]
-        safety_stock = math.ceil(daily * safety_days)
-        target_stock = math.ceil(daily * lead_time_days + safety_stock)
-        quantity = max(0, math.ceil(target_stock - inventory))
+        
+        # Apply supplier configuration if available
+        prod_suppliers = suppliers.get(product["product"], [])
+        primary_supplier = next((s for s in prod_suppliers if s["is_primary"]), prod_suppliers[0] if prod_suppliers else None)
+        
+        lt_days = primary_supplier["lead_time_days"] if primary_supplier else lead_time_days
+        lt_var_days = primary_supplier["lead_time_variability_days"] if primary_supplier else 0
+        moq = primary_supplier["moq"] if primary_supplier else 1
+        
+        # Safety stock includes base safety days + variability risk buffer
+        safety_stock = math.ceil(daily * (safety_days + lt_var_days))
+        target_stock = math.ceil(daily * lt_days + safety_stock)
+        raw_quantity = max(0, target_stock - inventory)
+        quantity = math.ceil(raw_quantity / moq) * moq if raw_quantity > 0 else 0
         stockout_days = round(inventory / daily, 1)
         
         reasons = []
-        if stockout_days < lead_time_days:
+        if stockout_days < lt_days:
             priority = "Critical"
-            reasons.append(f"Lead time risk: Projected stockout in {stockout_days} days is shorter than the {lead_time_days}-day supplier lead time.")
+            reasons.append(f"Lead time risk: Projected stockout in {stockout_days} days is shorter than the {lt_days}-day supplier lead time.")
         elif quantity:
             priority = "High"
         else:
             priority = "On track"
             
         if inventory < safety_stock:
-            reasons.append(f"Safety stock breach: Current inventory ({inventory}) is below the {safety_days}-day safety buffer ({safety_stock} units).")
+            reasons.append(f"Safety stock breach: Current inventory ({inventory}) is below the safety buffer ({safety_stock} units, including {lt_var_days} days variability).")
         elif quantity > 0 and priority != "Critical":
             reasons.append(f"Below target: Inventory ({inventory}) has fallen below the target stock level ({target_stock} units).")
+            
+        if quantity > raw_quantity and quantity > 0:
+             reasons.append(f"MOQ applied: Order quantity rounded up from {math.ceil(raw_quantity)} to meet Minimum Order Quantity ({moq}).")
             
         prod_anomalies = [a for a in anomalies_list if a["product"] == product["product"]]
         if prod_anomalies:
@@ -96,9 +113,10 @@ def inventory_recommendations(products, lead_time_days=14, safety_days=7, anomal
 
         recommendations.append({
             "product": product["product"], "priority": priority, "inventory": inventory,
-            "daily_demand": daily, "lead_time_days": lead_time_days, "safety_stock": safety_stock,
+            "daily_demand": daily, "lead_time_days": lt_days, "safety_stock": safety_stock,
             "target_stock": target_stock, "recommended_order": quantity,
             "estimated_stockout_days": stockout_days,
+            "supplier_name": primary_supplier["supplier_name"] if primary_supplier else None,
             "action": "Raise purchase order today" if priority == "Critical" else ("Plan replenishment" if quantity else "Monitor"),
             "reasons": reasons,
         })

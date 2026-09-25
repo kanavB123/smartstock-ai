@@ -177,6 +177,42 @@
                 </table>
               </div>
             </article>
+
+            <article class="panel wide-table" style="grid-column: 1 / -1;">
+              <div class="panel-heading">
+                <div>
+                  <h3>Supplier directory</h3>
+                  <p>Configure lead time, variability, and MOQ per product to tune reorder logic</p>
+                </div>
+              </div>
+              <div class="table-scroll">
+                <table style="min-width:600px;">
+                  <thead>
+                    <tr>
+                      <th>PRODUCT</th>
+                      <th>SUPPLIER NAME</th>
+                      <th>LEAD TIME</th>
+                      <th>VARIABILITY</th>
+                      <th>MOQ</th>
+                      <th>PRIMARY</th>
+                      <th>ACTION</th>
+                    </tr>
+                  </thead>
+                  <tbody id="suppliersTable">
+                    <tr><td colspan="7" class="muted-cell">Loading suppliers...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <form id="addSupplierForm" class="inline-form" style="padding:15px; border-top:1px solid var(--line); display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                <input type="text" id="supProduct" placeholder="Product name" required style="flex:1; min-width:120px;" class="input-base">
+                <input type="text" id="supName" placeholder="Supplier name" required style="flex:1; min-width:120px;" class="input-base">
+                <input type="number" id="supLead" placeholder="Lead days" required min="1" style="width:80px;" class="input-base">
+                <input type="number" id="supVar" placeholder="Var days" required min="0" style="width:80px;" class="input-base">
+                <input type="number" id="supMoq" placeholder="MOQ" required min="1" style="width:70px;" class="input-base">
+                <label style="display:flex; align-items:center; gap:5px; font-size:11px; cursor:pointer; color:var(--text);"><input type="checkbox" id="supPrimary" checked> Primary</label>
+                <button type="submit" class="btn-primary" style="padding:8px 12px; font-size:11px;">Add</button>
+              </form>
+            </article>
           </div>
         </section>
 
