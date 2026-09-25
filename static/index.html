@@ -7,6 +7,7 @@
     <title>SmartStock AI</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   </head>
   <body>
     <!-- Auth Overlay -->
@@ -183,7 +184,7 @@
           <div class="view-intro"><div><p class="eyebrow">RAG KNOWLEDGE ASSISTANT</p><h1 id="assistant-title">Ask with confidence.</h1><p>Answers are grounded in your uploaded documents and live product analysis.</p></div><span class="data-badge"><i></i> Source-cited answers</span></div>
           <section class="assistant-layout">
             <aside class="assistant-side"><h2>Try a question</h2><p>Use policies for operational context, or ask about the sales data currently in your workspace.</p><div class="suggestions"><button data-question="What are the lead times and minimum order quantities?">Lead times & MOQs <span>→</span></button><button data-question="When should we raise a reorder recommendation?">Reorder policy <span>→</span></button><button data-question="What is the 14-day forecast for Mechanical Keyboard?">Product forecast <span>→</span></button><button data-question="Which product responds to weekend promotions?">Product notes <span>→</span></button></div><div class="grounding-card"><span>✦</span><p><strong>Grounded by design</strong> The assistant returns only supporting sources from your workspace.</p></div></aside>
-            <article class="chat-window"><div class="chat-top"><span class="assistant-orb">✦</span><div><strong>SmartStock assistant</strong><small>Operations knowledge partner</small></div><span class="privacy">Private workspace</span></div>
+            <article class="chat-window"><div class="chat-top"><span class="assistant-orb">✦</span><div><strong>SmartStock assistant</strong><small>Operations knowledge partner</small></div><button class="btn-secondary" style="margin-left:auto;padding:4px 8px;font-size:10px" onclick="clearChat()">Clear chat</button></div>
             <div id="chatAnswer" class="chat-answer chat-messages">
               <div class="welcome-orb" style="margin:0 auto">✦</div>
               <h2 style="text-align:center">What can I help you find?</h2>

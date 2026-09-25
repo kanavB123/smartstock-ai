@@ -365,17 +365,27 @@ function renderChat() {
       if (msg.sources && msg.sources.length) {
         sourcesHtml = `<ul class="source-list">${msg.sources.map(s => `<li>↗ ${escapeHtml(s.name)} · chunk ${s.chunk}</li>`).join('')}</ul>`;
       }
+      
+      let followUpsHtml = '';
+      if (msg.follow_ups && msg.follow_ups.length) {
+        followUpsHtml = `<div class="follow-up-chips">
+          ${msg.follow_ups.map(f => `<button onclick="ask('${escapeHtml(f.replace(/'/g, "\\'"))}')">${escapeHtml(f)} <span>→</span></button>`).join('')}
+        </div>`;
+      }
+      
       const isLast = index === chatHistory.length - 1;
       let feedbackHtml = '';
       if (isLast && !msg.loading && !msg.error) {
         feedbackHtml = `
           <div class="chat-feedback" data-index="${index}">
-            <button class="upvote" onclick="sendFeedback('${escapeHtml(msg.question)}', 'up')">👍</button>
-            <button class="downvote" onclick="sendFeedback('${escapeHtml(msg.question)}', 'down')">👎</button>
+            <button class="upvote" onclick="sendFeedback('${escapeHtml(msg.question.replace(/'/g, "\\'"))}', 1)">👍</button>
+            <button class="downvote" onclick="sendFeedback('${escapeHtml(msg.question.replace(/'/g, "\\'"))}', -1)">👎</button>
           </div>
         `;
       }
-      return `<div class="chat-bubble assistant">${msg.content}${sourcesHtml}${feedbackHtml}</div>`;
+      // Render markdown if marked is available, else raw HTML
+      const htmlContent = window.marked ? marked.parse(msg.content) : `<p>${escapeHtml(msg.content)}</p>`;
+      return `<div class="chat-bubble assistant">${htmlContent}${sourcesHtml}${followUpsHtml}${feedbackHtml}</div>`;
     }
   }).join('');
   
@@ -387,7 +397,7 @@ window.sendFeedback = async function(question, rating) {
     await request('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, rating, comment: '' }),
+      body: JSON.stringify({ question, rating: parseInt(rating, 10), comment: '' }),
     });
     const buttons = document.querySelectorAll('.chat-feedback button');
     buttons.forEach(btn => btn.classList.add('voted'));
@@ -401,8 +411,13 @@ async function ask(questionText) {
   const value = (questionText || field.value).trim(); 
   if (!value) return;
   
+  // Create history payload without the new question
+  const historyPayload = chatHistory
+    .filter(msg => !msg.loading && !msg.error)
+    .map(msg => ({ role: msg.role, content: msg.content }));
+  
   chatHistory.push({ role: 'user', content: value });
-  chatHistory.push({ role: 'assistant', content: '<span class="loading">Finding supporting sources…</span>', loading: true });
+  chatHistory.push({ role: 'assistant', content: 'Finding supporting sources…', loading: true });
   renderChat();
   $('#askButton').disabled = true;
   field.value = '';
@@ -411,25 +426,31 @@ async function ask(questionText) {
     const result = await request('/api/chat', { 
       method: 'POST', 
       headers: { 'Content-Type': 'application/json' }, 
-      body: JSON.stringify({ question: value }) 
+      body: JSON.stringify({ question: value, history: historyPayload }) 
     });
     
     chatHistory[chatHistory.length - 1] = {
       role: 'assistant',
-      content: `<p>${escapeHtml(result.answer)}</p>`,
+      content: result.answer,
       sources: result.sources || [],
+      follow_ups: result.follow_ups || [],
       question: value
     };
   } catch (error) { 
     chatHistory[chatHistory.length - 1] = {
       role: 'assistant',
-      content: `<p>Could not answer: ${escapeHtml(error.message)}</p>`,
+      content: `Could not answer: ${error.message}`,
       error: true
     };
   }
   
   renderChat();
   $('#askButton').disabled = false;
+}
+
+window.clearChat = function() {
+  chatHistory = [];
+  renderChat();
 }
 
 // Intelligence

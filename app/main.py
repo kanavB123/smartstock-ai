@@ -236,7 +236,11 @@ def live_analysis_chunks(org_id):
     if not rows:
         return []
     chunks = []
-    for product in analysis_for_sales(rows):
+    products = analysis_for_sales(rows)
+    config = inventory_config_for(org_id)
+    
+    # 1. Product basics
+    for product in products:
         inventory = "not provided" if product["latest_inventory"] is None else "{} units".format(product["latest_inventory"])
         cover = "not available" if product["days_cover"] is None else "{} days".format(product["days_cover"])
         status = "needs a reorder review" if product["reorder"] else "is currently on track"
@@ -251,6 +255,43 @@ def live_analysis_chunks(org_id):
             ).format(product=product["product"], total=product["total_sales"], average=product["daily_average"],
                      forecast=product["forecast_14d"], inventory=inventory, cover=cover, status=status),
         })
+        
+    # 2. Recommendations & Reorder queue
+    recommendation_rows = []
+    for product in products:
+        pc = config.get(product["product"], {})
+        recs = inventory_recommendations([product], lead_time_days=pc.get("lead_time_days", 14), safety_days=pc.get("safety_days", 7))
+        recommendation_rows.extend(recs)
+        
+    for rec in recommendation_rows:
+        if rec["priority"] in ("Critical", "High"):
+            chunks.append({
+                "id": "reorder-{}".format(rec["product"]),
+                "name": "Live reorder queue — {}".format(rec["product"]),
+                "ordinal": 1,
+                "content": (
+                    "Reorder Recommendation for {product}: Status is {priority}. "
+                    "Current inventory: {inventory} units. Target stock: {target} units. "
+                    "Recommended order quantity: {order} units. "
+                    "Projected stockout in {stockout} days. Recommended action: {action}."
+                ).format(product=rec["product"], priority=rec["priority"], inventory=rec["inventory"], 
+                         target=rec["target_stock"], order=rec["recommended_order"], 
+                         stockout=rec["estimated_stockout_days"], action=rec["action"]),
+            })
+
+    # 3. Anomalies
+    anomaly_rows = anomalies(rows)
+    for index, anomaly in enumerate(anomaly_rows[:5]):
+        chunks.append({
+            "id": "anomaly-{}".format(index),
+            "name": "Live anomaly detection — {}".format(anomaly["product"]),
+            "ordinal": 1,
+            "content": (
+                "Unusual demand detected for {product}: {sales} units were sold on {date}. "
+                "This is {z_score} standard deviations from the normal average."
+            ).format(product=anomaly["product"], sales=anomaly["sales"], date=anomaly["date"], z_score=anomaly["z_score"]),
+        })
+        
     return chunks
 
 
@@ -274,8 +315,13 @@ def save_document(org_id, name, content):
 # Request / response models
 # ---------------------------------------------------------------------------
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
 class ChatRequest(BaseModel):
-    question: str = Field(min_length=3, max_length=1000)
+    question: str = Field(min_length=2, max_length=1000)
+    history: list[ChatMessage] = []
 
 
 class AuthRequest(BaseModel):
@@ -621,30 +667,57 @@ def executive_report(org_id: str = Depends(get_org_id)):
 
 @app.post("/api/chat")
 def chat(request: ChatRequest, org_id: str = Depends(get_org_id)):
-    sources = semantic_rank(request.question, chunks_for(org_id) + live_analysis_chunks(org_id))
-    # Deliberately pass only retrieved chunks to any optional model provider.
+    search_query = request.question
+    if request.history:
+        search_query = f"{request.history[-1].content} {request.question}"
+        
+    sources = semantic_rank(search_query, chunks_for(org_id) + live_analysis_chunks(org_id))
     answer = fallback_answer(request.question, sources)
     model_used = "source-grounded fallback"
+    follow_ups = []
+    
     api_key = os.getenv("OPENAI_API_KEY")
     if api_key and sources:
         try:
             from openai import OpenAI
             context = "\n\n".join("[{}] {}".format(source["name"], source["content"]) for source in sources)
-            response = OpenAI(api_key=api_key).responses.create(
+            
+            messages = [
+                {
+                    "role": "system", 
+                    "content": (
+                        "You are SmartStock AI. Answer only from the supplied context. "
+                        "Prioritize facts that directly answer the user's product and intent. "
+                        "Be concise, use Markdown formatting (bolding, lists), state uncertainty when needed, and do not invent business data.\n\n"
+                        f"Retrieved context:\n{context}"
+                    )
+                }
+            ]
+            for msg in request.history[-4:]:
+                messages.append({"role": msg.role, "content": msg.content})
+                
+            messages.append({
+                "role": "user", 
+                "content": request.question + "\n\nProvide a JSON response with two keys: 'answer' (markdown string) and 'follow_ups' (list of exactly 2 short relevant follow-up question strings)."
+            })
+            
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-                store=False,
-                instructions=("You are SmartStock AI. Answer only from the supplied context. "
-                              "Prioritize facts that directly answer the user's product and intent. "
-                              "Be concise, state uncertainty when needed, and do not invent business data."),
-                input="Question: {}\n\nRetrieved context:\n{}".format(request.question, context),
+                response_format={"type": "json_object"},
+                messages=messages,
+                temperature=0.3
             )
-            answer = response.output_text
-            model_used = "OpenAI Responses API"
+            result_data = json.loads(response.choices[0].message.content)
+            answer = result_data.get("answer", fallback_answer(request.question, sources))
+            follow_ups = result_data.get("follow_ups", [])
+            model_used = "OpenAI GPT-4o"
         except Exception:
-            # The product remains functional when a key is invalid or the provider is unavailable.
             logger.exception("OpenAI synthesis failed — using fallback answer.")
+            
     return {
         "answer": answer,
+        "follow_ups": follow_ups,
         "mode": model_used,
         "sources": [{"name": source["name"], "chunk": source["ordinal"], "excerpt": source["content"][:220]} for source in sources],
     }

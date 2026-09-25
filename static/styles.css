@@ -63,6 +63,14 @@
 .chat-feedback button{border:1px solid var(--line);background:var(--surface);border-radius:5px;padding:4px 8px;font-size:10px;cursor:pointer;transition:.2s}
 .chat-feedback button:hover{background:var(--mint);border-color:var(--green)}
 .chat-feedback button.voted{background:var(--mint);border-color:var(--green);pointer-events:none}
+.follow-up-chips { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
+.follow-up-chips button { text-align: left; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; font: 11px Manrope; color: var(--pine); cursor: pointer; transition: 0.2s; display: flex; justify-content: space-between; }
+.follow-up-chips button:hover { background: var(--mint); border-color: var(--green); }
+.follow-up-chips button span { color: var(--green); }
+.chat-bubble.assistant p { margin: 0 0 8px 0; }
+.chat-bubble.assistant p:last-child { margin-bottom: 0; }
+.chat-bubble.assistant ul { margin: 0 0 8px 0; padding-left: 20px; }
+.chat-bubble.assistant strong { color: var(--pine); }
 
 /* === Export/Download Buttons === */
 .action-row{display:flex;gap:10px;align-items:center}
